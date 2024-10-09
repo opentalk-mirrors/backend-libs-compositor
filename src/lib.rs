@@ -9,7 +9,6 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 use anyhow::{bail, Context, Result};
 use audio::{audio_mixer_task, NativeAudioStreamSource, Silence};
 use audio_nodes::{AudioConvert, AudioMixer};
-use bus::PipelineWatched;
 use elements::register_all;
 use ezk::nodes::{Access, AccessHandle};
 use ezk_image::{ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, YuvColorInfo};
@@ -21,21 +20,24 @@ use livekit::{
     webrtc::{audio_stream::native::NativeAudioStream, video_stream::native::NativeVideoStream},
 };
 use livekit_api::access_token::{AccessToken, AccessTokenError, VideoGrants};
-use sink::ActiveSink;
+use pipeline_watched::PipelineWatched;
+use sinks::ActiveSink;
 use tokio::{
     sync::{broadcast, mpsc, Mutex},
     task::JoinHandle,
 };
 use video::{VideoPipeline, VideoStream};
 
+pub mod audio;
+pub mod debug;
 pub mod elements;
 pub mod font;
 pub mod gst_with_context;
-pub mod mixer;
+pub mod pipeline_watched;
 pub mod sinks;
+pub mod video;
 
 pub use gst_with_context::*;
-pub use mixer::*;
 pub use sinks::*;
 
 #[macro_use]
