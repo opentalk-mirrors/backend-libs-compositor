@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::{Context, Result};
 use chrono::Local;
 use ezk_image::{
     resize::{FilterType, ResizeAlg, Resizer},
@@ -53,7 +54,7 @@ impl VideoPipeline {
         start: Instant,
         shared: Arc<Mutex<Shared>>,
         shutdown_channel: broadcast::Receiver<()>,
-    ) -> (mpsc::Sender<VideoStream>, JoinHandle<()>) {
+    ) -> Result<(mpsc::Sender<VideoStream>, JoinHandle<()>)> {
         let background_image =
             image::load_from_memory(include_bytes!("../assets/background.png")).unwrap();
         let logo_image =
@@ -83,8 +84,7 @@ impl VideoPipeline {
             HEIGHT,
             I420_COLOR,
             8,
-        )
-        .unwrap();
+        )?;
 
         let mut base_image = vec![0u8; PixelFormat::I420.buffer_size(WIDTH, HEIGHT)];
         ezk_image::convert_multi_thread(
@@ -96,13 +96,10 @@ impl VideoPipeline {
                 HEIGHT,
                 I420_COLOR,
                 8,
-            )
-            .unwrap(),
-        )
-        .unwrap();
+            )?,
+        )?;
 
-        let mut base_image_i420 =
-            I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT)).unwrap();
+        let mut base_image_i420 = I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
         render_image(
             logo_height,
             logo_width,
@@ -127,7 +124,7 @@ impl VideoPipeline {
             .run(shutdown_channel),
         );
 
-        (video_streams_tx, task)
+        Ok((video_streams_tx, task))
     }
 
     pub(crate) async fn run(mut self, mut shutdown_channel: broadcast::Receiver<()>) {
@@ -143,12 +140,14 @@ impl VideoPipeline {
                     // Move self into a blocking threadpool to avoid locking up the tokio runtime while compositing the video
                     let (tx, rx) = oneshot::channel();
                     tokio::task::spawn_blocking(move || {
-                        self.rerender_frame();
+                        if let Err(err) = self.rerender_frame() {
+                            log::error!("Rerender frame failed: {err:?}");
+                        }
 
                         if tx.send(self).is_err() {
                             log::error!("Failed to return to the async runtime from the blocking threadpool, was the task aborted?");
                         }
-                    }).await.unwrap();
+                    }).await.expect("unable to spawn rerender_frame task");
 
                     self = rx
                         .await
@@ -167,12 +166,12 @@ impl VideoPipeline {
     #[allow(clippy::many_single_char_names)]
     // TODO: Will be fixed later on
     #[allow(clippy::too_many_lines)]
-    fn rerender_frame(&mut self) {
+    fn rerender_frame(&mut self) -> Result<()> {
         let shared = self.shared.blocking_lock();
         let mut base_image = self.base_image.clone();
 
         let mut base_image_i420 =
-            font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT)).unwrap();
+            font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
         // ==== Render Event Title ====
 
@@ -190,7 +189,7 @@ impl VideoPipeline {
         // ==== Render Datetime ====
 
         let mut base_image_i420 =
-            font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT)).unwrap();
+            font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
         let text = &Local::now().format(&shared.clock_format.0).to_string();
         let date_time_text = SimpleText::new(32.0, text);
@@ -226,8 +225,7 @@ impl VideoPipeline {
                 video_frame.height() as usize,
                 I420_COLOR,
                 8,
-            )
-            .unwrap();
+            )?;
 
             let mut window =
                 calculate_speaker_view(pos, shared.visibles.len().min(8), WIDTH, HEIGHT, PADDING);
@@ -254,12 +252,9 @@ impl VideoPipeline {
                 window.height,
                 I420_COLOR,
                 8,
-            )
-            .unwrap();
+            )?;
 
-            self.resizer
-                .resize(src_image, resize_staging_image)
-                .unwrap();
+            self.resizer.resize(src_image, resize_staging_image)?;
 
             // Copy image into buffer
 
@@ -275,8 +270,7 @@ impl VideoPipeline {
                     window.height,
                     I420_COLOR,
                     8,
-                )
-                .unwrap(),
+                )?,
                 Image::new(
                     PixelFormat::I420,
                     PixelFormatPlanes::infer_i420(base_image.as_mut_slice(), WIDTH, HEIGHT),
@@ -284,17 +278,14 @@ impl VideoPipeline {
                     HEIGHT,
                     I420_COLOR,
                     8,
-                )
-                .unwrap()
-                .with_window(window)
-                .unwrap(),
-            )
-            .unwrap();
+                )?
+                .with_window(window)?,
+            )?;
 
             // ==== Render Participant Name ====
 
             let mut base_image_i420 =
-                font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT)).unwrap();
+                font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
             let simple_text = SimpleText::new(24.0, &participant.display_name);
             let text_box = TextBox::new(simple_text);
@@ -309,9 +300,12 @@ impl VideoPipeline {
 
         // ==== push image into GStreamer pipeline ====
 
-        let mut buffer = gst::Buffer::with_size(base_image.len()).unwrap();
+        let mut buffer = gst::Buffer::with_size(base_image.len())?;
         let mut_buffer = buffer.make_mut();
-        mut_buffer.copy_from_slice(0, &base_image).unwrap();
+        mut_buffer
+            .copy_from_slice(0, &base_image)
+            .ok()
+            .context("unable to copy from slice")?;
         mut_buffer.set_pts(gst::ClockTime::from_mseconds(
             Instant::now().duration_since(self.start).as_millis() as u64,
         ));
@@ -330,8 +324,12 @@ impl VideoPipeline {
 
         for appsrc in &shared.appsrc {
             log::trace!("Push video sample: {sample:?}");
-            appsrc.push_sample(&sample).unwrap();
+            if let Err(err) = appsrc.push_sample(&sample) {
+                log::error!("Unable to push video sample {sample:?}, received: {err:?}");
+            }
         }
+
+        Ok(())
     }
 }
 
