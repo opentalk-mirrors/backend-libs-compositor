@@ -164,7 +164,7 @@ impl Mixer {
         // Initialize Video Mixer
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let (video_streams_tx, video_task) =
-            VideoPipeline::create(start, shared.clone(), shutdown_rx);
+            VideoPipeline::create(start, shared.clone(), shutdown_rx)?;
 
         let mixer = Self {
             video_support: parameters.video_support,
@@ -547,7 +547,7 @@ impl Mixer {
                 )
             })))
             .await
-            .unwrap();
+            .expect("unable to send video_stream to video_streams_tx");
     }
 
     pub async fn remove_participant(&mut self, identity: &ParticipantIdentity) {
@@ -570,7 +570,7 @@ impl Drop for Mixer {
         tokio::task::block_in_place(move || {
             tokio::runtime::Handle::current().block_on(async move {
                 log::debug!("Send shutdown to all tasks");
-                self.shutdown_tx.send(()).unwrap();
+                self.shutdown_tx.send(()).ok();
 
                 if let Some(video_task) = self.video_task.take() {
                     if !video_task.is_finished() {

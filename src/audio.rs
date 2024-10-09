@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::{Context, Result};
 use audio_nodes::AudioMixer;
 use ezk::{
     nodes::Access, ConfigRange, Frame, NextEventIsCancelSafe, Source, SourceEvent, ValueRange,
@@ -156,7 +157,7 @@ pub(crate) async fn audio_mixer_task(
     start: Instant,
     mut audio_mixer: Access<AudioMixer>,
     appsrc: Arc<Mutex<Vec<AppSrc>>>,
-) {
+) -> Result<()> {
     'negotiate: loop {
         audio_mixer
             .negotiate_config(vec![RawAudioConfigRange {
@@ -165,17 +166,23 @@ pub(crate) async fn audio_mixer_task(
                 format: ValueRange::Value(FORMAT),
             }])
             .await
-            .unwrap();
+            .context("negotiate config for audio mixer failed")?;
 
         loop {
-            let event = audio_mixer.next_event().await.unwrap();
+            let event = audio_mixer
+                .next_event()
+                .await
+                .context("unable to poll next event")?;
 
             match event {
                 SourceEvent::Frame(frame) => {
                     let samples = frame.data().samples.as_bytes();
-                    let mut buffer = gst::Buffer::with_size(samples.len()).unwrap();
+                    let mut buffer = gst::Buffer::with_size(samples.len())
+                        .expect("unable to initialize gstreamer buffer with size");
                     let mut_buffer = buffer.make_mut();
-                    mut_buffer.copy_from_slice(0, samples).unwrap();
+                    mut_buffer
+                        .copy_from_slice(0, samples)
+                        .expect("unable to copy mut_buffer from slice samples: {samples:?}");
 
                     mut_buffer.set_pts(gst::ClockTime::from_mseconds(
                         Instant::now().duration_since(start).as_millis() as u64,
@@ -194,12 +201,16 @@ pub(crate) async fn audio_mixer_task(
                         .build();
 
                     for appsrc in appsrc.lock().await.iter() {
-                        appsrc.push_sample(&sample).unwrap();
+                        if let Err(err) = appsrc.push_sample(&sample) {
+                            log::error!(
+                                "Unable to push audio sample {sample:?}, received: {err:?}"
+                            );
+                        }
                     }
                 }
                 SourceEvent::EndOfData => {
                     // No more audio sources, this task quits now.
-                    return;
+                    return Ok(());
                 }
                 SourceEvent::RenegotiationNeeded => {
                     continue 'negotiate;
