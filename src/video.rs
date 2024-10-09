@@ -55,9 +55,9 @@ impl VideoPipeline {
         shutdown_channel: broadcast::Receiver<()>,
     ) -> (mpsc::Sender<VideoStream>, JoinHandle<()>) {
         let background_image =
-            image::load_from_memory(include_bytes!("../../assets/background.png")).unwrap();
+            image::load_from_memory(include_bytes!("../assets/background.png")).unwrap();
         let logo_image =
-            image::load_from_memory(include_bytes!("../../assets/logo_gradient.png")).unwrap();
+            image::load_from_memory(include_bytes!("../assets/logo_gradient.png")).unwrap();
 
         let (logo_width, logo_height) = (logo_image.width() as usize, logo_image.height() as usize);
 
