@@ -2,44 +2,65 @@
 //
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use audio_nodes::AudioMixer;
 use ezk::{
-    nodes::{Access, AccessHandle},
-    ConfigRange, Frame, NextEventIsCancelSafe, Source, SourceEvent,
+    nodes::Access, ConfigRange, Frame, NextEventIsCancelSafe, Source, SourceEvent, ValueRange,
 };
-use ezk_audio::{Channels, Format, RawAudioFrame, SampleRate};
+use ezk_audio::{
+    Channels, Format, RawAudio, RawAudioConfig, RawAudioConfigRange, RawAudioFrame, SampleRate,
+    Samples,
+};
 use futures::StreamExt;
 use gst::Sample;
 use gst_app::AppSrc;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
-use tokio::sync::Mutex;
+use tokio::{
+    sync::Mutex,
+    time::{interval, Interval},
+};
 
-pub(crate) struct NativeAudioStreamSource {
-    pub(crate) stream: NativeAudioStream,
-    pub(crate) timestamp: u64,
+pub(crate) struct Silence {
+    timestamp: u64,
+    interval: Interval,
 }
 
-impl Source for NativeAudioStreamSource {
-    type MediaType = ezk_audio::RawAudio;
+impl Default for Silence {
+    fn default() -> Self {
+        Self {
+            timestamp: 0,
+            interval: interval(Duration::from_millis(20)),
+        }
+    }
+}
 
-    async fn capabilities(&mut self) -> ezk::Result<Vec<ezk_audio::RawAudioConfigRange>> {
-        Ok(vec![ezk_audio::RawAudioConfigRange {
-            sample_rate: ezk::ValueRange::Value(ezk_audio::SampleRate(48000)),
-            channels: ezk::ValueRange::Value(ezk_audio::Channels::NotPositioned(2)),
-            format: ezk::ValueRange::Value(ezk_audio::Format::I16),
+const SAMPLE_RATE: u32 = 48_000;
+const CHANNELS: u32 = 2;
+const FORMAT: Format = Format::I16;
+
+impl Source for Silence {
+    type MediaType = RawAudio;
+
+    async fn capabilities(&mut self) -> ezk::Result<Vec<RawAudioConfigRange>> {
+        Ok(vec![RawAudioConfigRange {
+            sample_rate: ValueRange::Value(SampleRate(SAMPLE_RATE)),
+            channels: ValueRange::Value(Channels::NotPositioned(CHANNELS)),
+            format: ValueRange::Value(FORMAT),
         }])
     }
 
     async fn negotiate_config(
         &mut self,
-        available: Vec<ezk_audio::RawAudioConfigRange>,
-    ) -> ezk::Result<ezk_audio::RawAudioConfig> {
-        let config = ezk_audio::RawAudioConfig {
-            sample_rate: SampleRate(48_000),
-            channels: Channels::NotPositioned(2),
-            format: Format::I16,
+        available: Vec<RawAudioConfigRange>,
+    ) -> ezk::Result<RawAudioConfig> {
+        let config = RawAudioConfig {
+            sample_rate: SampleRate(SAMPLE_RATE),
+            channels: Channels::NotPositioned(CHANNELS),
+            format: FORMAT,
         };
 
         if !available.iter().any(|r| r.contains(&config)) {
@@ -52,7 +73,65 @@ impl Source for NativeAudioStreamSource {
         Ok(config)
     }
 
-    async fn next_event(&mut self) -> ezk::Result<ezk::SourceEvent<Self::MediaType>> {
+    async fn next_event(&mut self) -> ezk::Result<SourceEvent<Self::MediaType>> {
+        self.interval.tick().await;
+
+        let samples_per_channel = SAMPLE_RATE / (1000 / self.interval.period().as_millis() as u32);
+
+        let event = SourceEvent::Frame(Frame::new(
+            RawAudioFrame {
+                sample_rate: SampleRate(SAMPLE_RATE),
+                channels: Channels::NotPositioned(CHANNELS),
+                samples: Samples::equilibrium(FORMAT, (samples_per_channel * CHANNELS) as usize),
+            },
+            self.timestamp,
+        ));
+
+        self.timestamp += u64::from(samples_per_channel);
+
+        Ok(event)
+    }
+}
+
+impl NextEventIsCancelSafe for Silence {}
+
+pub(crate) struct NativeAudioStreamSource {
+    pub(crate) stream: NativeAudioStream,
+    pub(crate) timestamp: u64,
+}
+
+impl Source for NativeAudioStreamSource {
+    type MediaType = RawAudio;
+
+    async fn capabilities(&mut self) -> ezk::Result<Vec<RawAudioConfigRange>> {
+        Ok(vec![RawAudioConfigRange {
+            sample_rate: ValueRange::Value(SampleRate(SAMPLE_RATE)),
+            channels: ValueRange::Value(Channels::NotPositioned(CHANNELS)),
+            format: ValueRange::Value(FORMAT),
+        }])
+    }
+
+    async fn negotiate_config(
+        &mut self,
+        available: Vec<RawAudioConfigRange>,
+    ) -> ezk::Result<RawAudioConfig> {
+        let config = RawAudioConfig {
+            sample_rate: SampleRate(SAMPLE_RATE),
+            channels: Channels::NotPositioned(CHANNELS),
+            format: FORMAT,
+        };
+
+        if !available.iter().any(|r| r.contains(&config)) {
+            return Err(ezk::Error::negotiation_failed(
+                available,
+                self.capabilities().await?,
+            ));
+        }
+
+        Ok(config)
+    }
+
+    async fn next_event(&mut self) -> ezk::Result<SourceEvent<Self::MediaType>> {
         let Some(frame) = self.stream.next().await else {
             return Ok(SourceEvent::EndOfData);
         };
@@ -76,15 +155,14 @@ impl NextEventIsCancelSafe for NativeAudioStreamSource {}
 pub(crate) async fn audio_mixer_task(
     start: Instant,
     mut audio_mixer: Access<AudioMixer>,
-    audio_mixer_handle: Arc<Mutex<Option<AccessHandle<AudioMixer>>>>,
     appsrc: Arc<Mutex<Vec<AppSrc>>>,
 ) {
     'negotiate: loop {
         audio_mixer
-            .negotiate_config(vec![ezk_audio::RawAudioConfigRange {
-                sample_rate: ezk::ValueRange::Value(ezk_audio::SampleRate(48000)),
-                channels: ezk::ValueRange::Value(ezk_audio::Channels::NotPositioned(2)),
-                format: ezk::ValueRange::Value(ezk_audio::Format::I16),
+            .negotiate_config(vec![RawAudioConfigRange {
+                sample_rate: ValueRange::Value(SampleRate(SAMPLE_RATE)),
+                channels: ValueRange::Value(Channels::NotPositioned(CHANNELS)),
+                format: ValueRange::Value(FORMAT),
             }])
             .await
             .unwrap();
@@ -109,8 +187,8 @@ pub(crate) async fn audio_mixer_task(
                             &gst::Caps::builder("audio/x-raw")
                                 .field("format", "S16LE")
                                 .field("layout", "interleaved")
-                                .field("rate", 48_000)
-                                .field("channels", 2)
+                                .field("rate", SAMPLE_RATE)
+                                .field("channels", CHANNELS)
                                 .build(),
                         )
                         .build();
@@ -121,8 +199,6 @@ pub(crate) async fn audio_mixer_task(
                 }
                 SourceEvent::EndOfData => {
                     // No more audio sources, this task quits now.
-                    // Unset the access handle so a new task is created when new audio sources appear
-                    *audio_mixer_handle.lock().await = None;
                     return;
                 }
                 SourceEvent::RenegotiationNeeded => {

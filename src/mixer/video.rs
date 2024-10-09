@@ -22,7 +22,7 @@ use livekit::{
     webrtc::video_frame::{I420Buffer, VideoBuffer},
 };
 use tokio::{
-    sync::{mpsc, oneshot, Mutex},
+    sync::{broadcast, mpsc, oneshot, Mutex},
     task::JoinHandle,
 };
 
@@ -52,6 +52,7 @@ impl VideoPipeline {
     pub(crate) fn create(
         start: Instant,
         shared: Arc<Mutex<Shared>>,
+        shutdown_channel: broadcast::Receiver<()>,
     ) -> (mpsc::Sender<VideoStream>, JoinHandle<()>) {
         let background_image =
             image::load_from_memory(include_bytes!("../../assets/background.png")).unwrap();
@@ -123,17 +124,21 @@ impl VideoPipeline {
                 video_sources: SelectAll::default(),
                 start,
             }
-            .run(),
+            .run(shutdown_channel),
         );
 
         (video_streams_tx, task)
     }
 
-    pub(crate) async fn run(mut self) {
+    pub(crate) async fn run(mut self, mut shutdown_channel: broadcast::Receiver<()>) {
         let mut rerender_interval = tokio::time::interval(Duration::from_secs_f64(1. / 25.));
 
         loop {
             tokio::select! {
+                _ = shutdown_channel.recv() => {
+                    log::debug!("Shutdown received for VideoPipeline");
+                    return;
+                }
                 _ = rerender_interval.tick() => {
                     // Move self into a blocking threadpool to avoid locking up the tokio runtime while compositing the video
                     let (tx, rx) = oneshot::channel();
@@ -324,6 +329,7 @@ impl VideoPipeline {
             .build();
 
         for appsrc in &shared.appsrc {
+            log::trace!("Push video sample: {sample:?}");
             appsrc.push_sample(&sample).unwrap();
         }
     }

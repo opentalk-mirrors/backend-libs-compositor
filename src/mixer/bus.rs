@@ -137,15 +137,6 @@ impl PipelineWatched {
         self.callbacks.lock().push(Box::new(callback));
     }
 
-    pub(crate) fn clone_for_drop(&mut self) -> Self {
-        Self {
-            pipeline: self.pipeline.clone(),
-            eos: self.eos.take(),
-            callbacks: Arc::default(),
-            _bus_watch_guard: None,
-        }
-    }
-
     pub(crate) async fn drop(&mut self) {
         log::debug!("drop sink {}", self.pipeline.name());
 
