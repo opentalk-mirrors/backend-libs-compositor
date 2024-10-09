@@ -30,6 +30,18 @@ variables:
       when: never
     - if: $CI_COMMIT_BRANCH
 
+.install_gstreamer_deps: &install_gstreamer_deps
+  - >
+    sed -i 's/^Components: main$/& contrib non-free non-free-firmware/'
+    /etc/apt/sources.list.d/debian.sources
+  - apt-get update
+  - >
+    apt-get update && apt-get install -y --no-install-recommends
+    build-essential libssl-dev libbz2-dev
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev
+    gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+    gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-vaapi libfdk-aac2 gstreamer1.0-fdkaac
+
 lint:fmt:
   stage: lint
   <<: *default_job_condition
@@ -42,16 +54,7 @@ lint:clippy:
   stage: lint
   <<: *default_job_condition
   before_script:
-    - >
-      sed -i 's/^Components: main$/& contrib non-free non-free-firmware/'
-      /etc/apt/sources.list.d/debian.sources
-    - apt-get update
-    - >
-     apt-get update && apt-get install -y --no-install-recommends
-     build-essential libssl-dev libbz2-dev
-     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev
-     gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
-     gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-vaapi libfdk-aac2 gstreamer1.0-fdkaac
+    - *install_gstreamer_deps
   script:
     # Use clippy::pedantic for the entire source code
     # TODO: This it temporary and this rules will be added in the future
@@ -127,16 +130,7 @@ test:cargo_test:
     RUSTFLAGS: -Ctarget-feature=-crt-static -Cinstrument-coverage -Clink-arg=-fuse-ld=lld
     LLVM_PROFILE_FILE: ./target/coverage/raw/coverage-%p-%m.profraw
   before_script:
-    - >
-      sed -i 's/^Components: main$/& contrib non-free non-free-firmware/'
-      /etc/apt/sources.list.d/debian.sources
-    - apt-get update
-    - >
-     apt-get update && apt-get install -y --no-install-recommends
-     build-essential libssl-dev libbz2-dev
-     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev
-     gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
-     gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-vaapi libfdk-aac2 gstreamer1.0-fdkaac
+    - *install_gstreamer_deps
   script:
     # tests wetc_scenario1 is ignored until fixed
     - >
@@ -163,16 +157,7 @@ test:doc:
   stage: test
   <<: *default_job_condition
   before_script:
-    - >
-      sed -i 's/^Components: main$/& contrib non-free non-free-firmware/'
-      /etc/apt/sources.list.d/debian.sources
-    - apt-get update
-    - >
-     apt-get update && apt-get install -y --no-install-recommends
-     build-essential libssl-dev libbz2-dev
-     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev
-     gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
-     gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-vaapi libfdk-aac2 gstreamer1.0-fdkaac
+    - *install_gstreamer_deps
   script:
     - cargo doc --workspace --verbose
 
@@ -185,16 +170,7 @@ test:cargo_publish:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
     - if: $CI_PIPELINE_SOURCE == 'schedule'
   before_script:
-    - >
-      sed -i 's/^Components: main$/& contrib non-free non-free-firmware/'
-      /etc/apt/sources.list.d/debian.sources
-    - apt-get update
-    - >
-     apt-get update && apt-get install -y --no-install-recommends
-     build-essential libssl-dev libbz2-dev
-     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev
-     gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
-     gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-vaapi libfdk-aac2 gstreamer1.0-fdkaac
+    - *install_gstreamer_deps
   script:
     cargo publish --dry-run
 
@@ -204,15 +180,6 @@ release:cargo_publish:
   rules:
     - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9-\.]+)?$/
   before_script:
-    - >
-      sed -i 's/^Components: main$/& contrib non-free non-free-firmware/'
-      /etc/apt/sources.list.d/debian.sources
-    - apt-get update
-    - >
-     apt-get update && apt-get install -y --no-install-recommends
-     build-essential libssl-dev libbz2-dev
-     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev
-     gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
-     gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-vaapi libfdk-aac2 gstreamer1.0-fdkaac
+    - *install_gstreamer_deps
   script:
     cargo publish
