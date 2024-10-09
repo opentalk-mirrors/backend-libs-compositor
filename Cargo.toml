@@ -4,15 +4,15 @@
 
 [package]
 authors = ["OpenTalk Team <mail@opentalk.eu>"]
-description = "GStreamer based compositor for the OpenTalk Recorder and Obelisk"
+description = "Compositor for the OpenTalk Recorder and Obelisk"
 documentation = "https://docs.rs/opentalk-compositor"
 edition = "2021"
 homepage = "https://opentalk.eu/"
 license = "EUPL-1.2"
 name = "opentalk-compositor"
 publish = true
-repository = "https://gitlab.opencode.de/opentalk/recorder"
-version = "0.0.0-dev"
+repository = "https://gitlab.opencode.de/opentalk/libs/compositor"
+version = "0.7.0"
 
 [dependencies]
 ab_glyph = "0.2"
