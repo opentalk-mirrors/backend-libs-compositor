@@ -194,8 +194,8 @@ pub(crate) async fn audio_mixer_task(
                             &gst::Caps::builder("audio/x-raw")
                                 .field("format", "S16LE")
                                 .field("layout", "interleaved")
-                                .field("rate", SAMPLE_RATE)
-                                .field("channels", CHANNELS)
+                                .field("rate", SAMPLE_RATE as i32)
+                                .field("channels", CHANNELS as i32)
                                 .build(),
                         )
                         .build();
