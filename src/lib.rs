@@ -94,7 +94,6 @@ pub struct Mixer {
     // Video
     video_tracks_on_hold: HashMap<ParticipantIdentity, Vec<(TrackSid, RemoteVideoTrack)>>,
     video_streams_tx: mpsc::Sender<VideoStream>,
-    video_shared: Arc<Mutex<VideoShared>>,
 
     // Tasks for cleaner shutdown
     tasks: Vec<JoinHandle<()>>,
@@ -103,10 +102,7 @@ pub struct Mixer {
 #[derive(Debug, Clone)]
 struct Shared {
     participants: HashMap<ParticipantIdentity, Participant>,
-}
 
-#[derive(Debug, Clone)]
-struct VideoShared {
     clock_format: ClockFormat,
     event_title: Option<String>,
     visibles: Vec<TrackSid>,
@@ -152,9 +148,6 @@ impl Mixer {
 
         let shared = Arc::new(Mutex::new(Shared {
             participants: HashMap::default(),
-        }));
-
-        let video_shared = Arc::new(Mutex::new(VideoShared {
             clock_format: parameters.clock_format,
             event_title: None,
             visibles: Vec::default(),
@@ -163,7 +156,7 @@ impl Mixer {
 
         let start = Instant::now();
 
-        let (video_streams_tx, task) = VideoPipeline::create(start, shared.clone(), &video_shared);
+        let (video_streams_tx, task) = VideoPipeline::create(start, shared.clone());
 
         let mixer = Self {
             video_support: parameters.video_support,
@@ -176,7 +169,6 @@ impl Mixer {
             audio_mixer_handle: Arc::default(),
             audio_appsrc: Arc::default(),
             video_tracks_on_hold: HashMap::default(),
-            video_shared,
             video_streams_tx,
             tasks: vec![task],
         };
@@ -194,8 +186,6 @@ impl Mixer {
         bail!("Disconnected from livekit")
     }
 
-    // TODO: This will be fixed later on
-    #[allow(clippy::too_many_lines)]
     async fn handle_livekit_event(&mut self, event: livekit::RoomEvent) -> Result<()> {
         match event {
             RoomEvent::TrackSubscribed {
@@ -243,7 +233,7 @@ impl Mixer {
                 participant: _,
             } => {
                 log::info!("track subscribed: {track:?}");
-                self.video_shared
+                self.shared
                     .lock()
                     .await
                     .visibles
@@ -251,58 +241,13 @@ impl Mixer {
             }
             RoomEvent::ActiveSpeakersChanged { speakers } => {
                 log::info!("active speaker changed: {speakers:?}");
-                let video_shared = self.video_shared.lock().await;
-                let participants = self.shared.lock().await.participants.clone();
-                let visibles = video_shared.visibles.clone();
-                drop(video_shared);
-
-                if visibles.len() <= 2 {
-                    return Ok(());
-                }
-
-                let active_speakers = speakers.iter().filter(|speaker| {
-                    participants.contains_key(&speaker.identity()) && speaker.is_speaking()
-                });
-                for participant in active_speakers {
-                    let screen_share_tracks = participant
-                        .track_publications()
-                        .into_iter()
-                        .filter(|(_, track_publication)| {
-                            track_publication.source() == TrackSource::Screenshare
-                        })
-                        .map(|(track_sid, _)| track_sid)
-                        .collect::<Vec<_>>();
-                    let latest_screen_share_position = visibles
-                        .clone()
-                        .iter()
-                        .enumerate()
-                        .last()
-                        .map(|(index, _)| index);
-                    let camera_tracks = participant
-                        .track_publications()
-                        .into_iter()
-                        .filter(|(_, track_publication)| {
-                            track_publication.source() == TrackSource::Camera
-                        })
-                        .map(|(track_sid, _)| track_sid);
-                    for track_sid in screen_share_tracks {
-                        let mut video_shared = self.video_shared.lock().await;
-                        video_shared.visibles.retain(|self_| self_ != &track_sid);
-                        video_shared.visibles.insert(0, track_sid.clone());
-                    }
-                    for track_sid in camera_tracks {
-                        let mut video_shared = self.video_shared.lock().await;
-                        video_shared.visibles.retain(|self_| self_ != &track_sid);
-                        let index = latest_screen_share_position.unwrap_or_default();
-                        video_shared.visibles.insert(index, track_sid);
-                    }
-                }
+                self.handle_active_speakers_changed(speakers).await?;
             }
             RoomEvent::TrackMuted {
                 participant: _,
                 publication,
             } => {
-                let mut video_shared = self.video_shared.lock().await;
+                let mut video_shared = self.shared.lock().await;
                 video_shared
                     .visibles
                     .retain(|track_sid| track_sid != &publication.sid());
@@ -318,15 +263,64 @@ impl Mixer {
                     .participants
                     .contains_key(&participant.identity())
                 {
-                    self.video_shared
-                        .lock()
-                        .await
-                        .visibles
-                        .push(publication.sid());
+                    self.shared.lock().await.visibles.push(publication.sid());
                 }
             }
             other => {
                 log::info!("other event: {other:?}");
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_active_speakers_changed(
+        &mut self,
+        speakers: Vec<livekit::participant::Participant>,
+    ) -> Result<()> {
+        let shared = &mut *self.shared.lock().await;
+
+        if shared.visibles.len() <= 2 {
+            return Ok(());
+        }
+
+        let active_speakers = speakers.iter().filter(|speaker| {
+            shared.participants.contains_key(&speaker.identity()) && speaker.is_speaking()
+        });
+
+        for participant in active_speakers {
+            let screen_share_tracks = participant
+                .track_publications()
+                .into_iter()
+                .filter(|(_, track_publication)| {
+                    track_publication.source() == TrackSource::Screenshare
+                })
+                .map(|(track_sid, _)| track_sid)
+                .collect::<Vec<_>>();
+
+            // FIXME: This is missing a filter over screenshare tracks
+            let latest_screen_share_position = shared
+                .visibles
+                .iter()
+                .enumerate()
+                .last()
+                .map(|(index, _)| index);
+
+            let camera_tracks = participant
+                .track_publications()
+                .into_iter()
+                .filter(|(_, track_publication)| track_publication.source() == TrackSource::Camera)
+                .map(|(track_sid, _)| track_sid);
+
+            for track_sid in screen_share_tracks {
+                shared.visibles.retain(|self_| self_ != &track_sid);
+                shared.visibles.insert(0, track_sid.clone());
+            }
+
+            for track_sid in camera_tracks {
+                shared.visibles.retain(|self_| self_ != &track_sid);
+                let index = latest_screen_share_position.unwrap_or_default();
+                shared.visibles.insert(index, track_sid);
             }
         }
 
@@ -388,11 +382,7 @@ impl Mixer {
                 .is_live(true)
                 .build();
 
-            self.video_shared
-                .lock()
-                .await
-                .appsrc
-                .push(video_src.clone());
+            self.shared.lock().await.appsrc.push(video_src.clone());
 
             Some(video_src)
         } else {
@@ -466,7 +456,7 @@ impl Mixer {
                 .retain(|appsrc| sink.audio_src.name() != appsrc.name());
 
             if let Some(video_src) = &sink.video_src {
-                self.video_shared
+                self.shared
                     .lock()
                     .await
                     .appsrc
@@ -478,7 +468,7 @@ impl Mixer {
     }
 
     pub async fn set_event_title(&mut self, title: String) {
-        self.video_shared.lock().await.event_title = Some(title);
+        self.shared.lock().await.event_title = Some(title);
     }
 
     pub async fn add_participant(&mut self, identity: ParticipantIdentity, display_name: String) {
@@ -543,6 +533,7 @@ impl Mixer {
             self.audio_mixer_handle.clone(),
             self.audio_appsrc.clone(),
         ));
+
         self.tasks.push(task);
     }
 
@@ -553,7 +544,6 @@ impl Mixer {
         video_track: RemoteVideoTrack,
     ) {
         let mut shared = self.shared.lock().await;
-        let mut video_shared = self.video_shared.lock().await;
 
         let Some(participant) = shared.participants.get_mut(&participant_identity) else {
             panic!("this case should never happen, a video track can only be inserted for a participant");
@@ -561,9 +551,9 @@ impl Mixer {
         participant.tracks.push(track_sid.clone());
 
         if video_track.source() == TrackSource::Screenshare {
-            video_shared.visibles.insert(0, track_sid.clone());
+            shared.visibles.insert(0, track_sid.clone());
         } else {
-            video_shared.visibles.push(track_sid.clone());
+            shared.visibles.push(track_sid.clone());
         }
 
         let rtc_track = video_track.rtc_track();
@@ -584,7 +574,7 @@ impl Mixer {
     pub async fn remove_participant(&mut self, identity: &ParticipantIdentity) {
         log::debug!("Add participant {identity:?}");
         if let Some(participant) = self.shared.lock().await.participants.remove(identity) {
-            self.video_shared
+            self.shared
                 .lock()
                 .await
                 .visibles

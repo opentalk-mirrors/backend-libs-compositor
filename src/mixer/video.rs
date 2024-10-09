@@ -28,7 +28,7 @@ use tokio::{
 
 use crate::{
     font::{self, blend_yuv, DrawText, I420Image, Point, SimpleText, TextBox},
-    Shared, VideoShared, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING, WIDTH,
+    Shared, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING, WIDTH,
 };
 
 pub(crate) type VideoStream =
@@ -45,8 +45,6 @@ pub(crate) struct VideoPipeline {
     pub(crate) video_sources: SelectAll<VideoStream>,
     pub(crate) video_frames: HashMap<TrackSid, I420Buffer>,
 
-    pub(crate) video_shared: Arc<Mutex<VideoShared>>,
-
     pub(crate) start: Instant,
 }
 
@@ -54,7 +52,6 @@ impl VideoPipeline {
     pub(crate) fn create(
         start: Instant,
         shared: Arc<Mutex<Shared>>,
-        video_shared: &Arc<Mutex<VideoShared>>,
     ) -> (mpsc::Sender<VideoStream>, JoinHandle<()>) {
         let background_image =
             image::load_from_memory(include_bytes!("../../assets/background.png")).unwrap();
@@ -122,7 +119,6 @@ impl VideoPipeline {
                 resize_staging_buffer: vec![0u8; PixelFormat::I420.buffer_size(WIDTH, HEIGHT)],
                 shared,
                 video_streams_rx,
-                video_shared: video_shared.clone(),
                 video_frames: HashMap::default(),
                 video_sources: SelectAll::default(),
                 start,
@@ -168,7 +164,6 @@ impl VideoPipeline {
     #[allow(clippy::too_many_lines)]
     fn rerender_frame(&mut self) {
         let shared = self.shared.blocking_lock();
-        let video_shared = self.video_shared.blocking_lock();
         let mut base_image = self.base_image.clone();
 
         let mut base_image_i420 =
@@ -176,7 +171,7 @@ impl VideoPipeline {
 
         // ==== Render Event Title ====
 
-        if let Some(event_title) = &video_shared.event_title {
+        if let Some(event_title) = &shared.event_title {
             let event_title_text = SimpleText::new(32.0, event_title);
             event_title_text.draw(
                 Point::new(
@@ -192,9 +187,7 @@ impl VideoPipeline {
         let mut base_image_i420 =
             font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT)).unwrap();
 
-        let text = &Local::now()
-            .format(&video_shared.clock_format.0)
-            .to_string();
+        let text = &Local::now().format(&shared.clock_format.0).to_string();
         let date_time_text = SimpleText::new(32.0, text);
 
         date_time_text.draw(
@@ -207,7 +200,7 @@ impl VideoPipeline {
 
         // ==== Render All Participants  ====
 
-        for (pos, track_sid) in video_shared.visibles.iter().take(8).enumerate() {
+        for (pos, track_sid) in shared.visibles.iter().take(8).enumerate() {
             let Some((_, participant)) = shared
                 .participants
                 .iter()
@@ -231,13 +224,8 @@ impl VideoPipeline {
             )
             .unwrap();
 
-            let mut window = calculate_speaker_view(
-                pos,
-                video_shared.visibles.len().min(8),
-                WIDTH,
-                HEIGHT,
-                PADDING,
-            );
+            let mut window =
+                calculate_speaker_view(pos, shared.visibles.len().min(8), WIDTH, HEIGHT, PADDING);
 
             let original_aspect_ratio = video_frame.width() as f32 / video_frame.height() as f32;
 
@@ -335,7 +323,7 @@ impl VideoPipeline {
             )
             .build();
 
-        for appsrc in &video_shared.appsrc {
+        for appsrc in &shared.appsrc {
             appsrc.push_sample(&sample).unwrap();
         }
     }
@@ -370,6 +358,7 @@ fn render_image(
     base_image: &mut I420Image<'_>,
 ) {
     let logo_image = logo_image.to_rgba8();
+
     for y in 0..height {
         for x in 0..width {
             let [r, g, b, a] = logo_image.get_pixel(x as u32, y as u32).0;
