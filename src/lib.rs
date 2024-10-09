@@ -7,7 +7,7 @@
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use anyhow::{bail, Context, Result};
-use audio::{audio_mixer_task, NativeAudioStreamSource};
+use audio::{audio_mixer_task, NativeAudioStreamSource, Silence};
 use audio_nodes::{AudioConvert, AudioMixer};
 use bus::PipelineWatched;
 use elements::register_all;
@@ -18,15 +18,12 @@ use gst::{prelude::*, Clock, ClockTime, Fraction, State, SystemClock};
 use gst_app::AppSrc;
 use livekit::{
     prelude::*,
-    webrtc::{
-        audio_stream::native::NativeAudioStream, prelude::*,
-        video_stream::native::NativeVideoStream,
-    },
+    webrtc::{audio_stream::native::NativeAudioStream, video_stream::native::NativeVideoStream},
 };
 use livekit_api::access_token::{AccessToken, AccessTokenError, VideoGrants};
 use sink::ActiveSink;
 use tokio::{
-    sync::{mpsc, Mutex},
+    sync::{broadcast, mpsc, Mutex},
     task::JoinHandle,
 };
 use video::{VideoPipeline, VideoStream};
@@ -76,7 +73,6 @@ pub const OFFSET_TOP: usize = 40;
 
 pub struct Mixer {
     video_support: bool,
-    start: Instant,
     sinks: HashMap<String, ActiveSink>,
     system_clock: Clock,
 
@@ -88,15 +84,15 @@ pub struct Mixer {
 
     // Audio
     audio_tracks_on_hold: HashMap<ParticipantIdentity, Vec<RemoteAudioTrack>>,
-    audio_mixer_handle: Arc<Mutex<Option<AccessHandle<AudioMixer>>>>,
+    audio_mixer_handle: Arc<Mutex<AccessHandle<AudioMixer>>>,
     audio_appsrc: Arc<Mutex<Vec<AppSrc>>>,
 
     // Video
     video_tracks_on_hold: HashMap<ParticipantIdentity, Vec<(TrackSid, RemoteVideoTrack)>>,
     video_streams_tx: mpsc::Sender<VideoStream>,
+    video_task: Option<JoinHandle<()>>,
 
-    // Tasks for cleaner shutdown
-    tasks: Vec<JoinHandle<()>>,
+    shutdown_tx: broadcast::Sender<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -156,21 +152,31 @@ impl Mixer {
 
         let start = Instant::now();
 
-        let (video_streams_tx, task) = VideoPipeline::create(start, shared.clone());
+        // Initialize Audio Mixer
+        let (access, audio_mixer_handle) =
+            Access::new(AudioMixer::new(AudioConvert::new(Silence::default())));
+        let audio_mixer_handle = Arc::new(Mutex::new(audio_mixer_handle));
+        let audio_appsrc = Arc::new(Mutex::new(Vec::<AppSrc>::new()));
+        tokio::spawn(audio_mixer_task(start, access, audio_appsrc.clone()));
+
+        // Initialize Video Mixer
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (video_streams_tx, video_task) =
+            VideoPipeline::create(start, shared.clone(), shutdown_rx);
 
         let mixer = Self {
             video_support: parameters.video_support,
-            start,
             sinks: HashMap::default(),
             system_clock: SystemClock::obtain(),
             room_events,
             shared,
             audio_tracks_on_hold: HashMap::default(),
-            audio_mixer_handle: Arc::default(),
-            audio_appsrc: Arc::default(),
+            audio_mixer_handle,
+            audio_appsrc,
             video_tracks_on_hold: HashMap::default(),
             video_streams_tx,
-            tasks: vec![task],
+            video_task: Some(video_task),
+            shutdown_tx,
         };
 
         Ok(mixer)
@@ -496,45 +502,16 @@ impl Mixer {
     }
 
     async fn add_audio_track(&mut self, audio_track: RemoteAudioTrack) {
-        let mut audio_mixer_handle = self.audio_mixer_handle.lock().await;
-
-        // Check, is there a audio mixer task active?
-        if let Some(audio_mixer) = &mut *audio_mixer_handle {
-            let audio_track: RtcAudioTrack = audio_track.rtc_track();
-
-            // If its active add the new source
-            let access_result = audio_mixer
-                .access(|audio_mixer| {
-                    audio_mixer.add_source(AudioConvert::new(NativeAudioStreamSource {
-                        stream: NativeAudioStream::new(audio_track, 48_000, 2),
-                        timestamp: 0,
-                    }));
-                })
-                .await;
-
-            if access_result.is_some() {
-                return;
-            }
-        }
-
-        // No audio mixer task active,spawn one
-        let (access, new_audio_mixer_handle) = Access::new(AudioMixer::new(AudioConvert::new(
-            NativeAudioStreamSource {
-                stream: NativeAudioStream::new(audio_track.rtc_track(), 48_000, 2),
-                timestamp: 0,
-            },
-        )));
-
-        *audio_mixer_handle = Some(new_audio_mixer_handle);
-
-        let task = tokio::spawn(audio_mixer_task(
-            self.start,
-            access,
-            self.audio_mixer_handle.clone(),
-            self.audio_appsrc.clone(),
-        ));
-
-        self.tasks.push(task);
+        self.audio_mixer_handle
+            .lock()
+            .await
+            .access(move |audio_mixer| {
+                audio_mixer.add_source(AudioConvert::new(NativeAudioStreamSource {
+                    stream: NativeAudioStream::new(audio_track.rtc_track(), 48_000, 2),
+                    timestamp: 0,
+                }));
+            })
+            .await;
     }
 
     async fn add_video_track(
@@ -586,26 +563,26 @@ impl Mixer {
 
 impl Drop for Mixer {
     fn drop(&mut self) {
-        log::debug!("Drop mixer");
-        for task in self.tasks.drain(..) {
-            task.abort();
-        }
-
-        let mut sink_pipelines = Vec::new();
-
-        for active_sink in self.sinks.values_mut() {
-            sink_pipelines.push(active_sink.pipeline.clone_for_drop());
-        }
+        log::debug!("Drop Mixer");
 
         tokio::task::block_in_place(move || {
             tokio::runtime::Handle::current().block_on(async move {
-                for mut sink_pipeline in sink_pipelines {
-                    sink_pipeline.drop().await;
+                log::debug!("Send shutdown to all tasks");
+                self.shutdown_tx.send(()).unwrap();
+
+                if let Some(video_task) = self.video_task.take() {
+                    if !video_task.is_finished() {
+                        log::debug!("Wait for video task to be finished");
+                        video_task.await.expect("unable to await video task");
+                    }
+                }
+
+                log::debug!("Drop all active sinks");
+                for (_, mut sink_pipeline) in self.sinks.drain() {
+                    sink_pipeline.pipeline.drop().await;
                 }
             });
         });
-
-        log::debug!("Mixer is dropped");
     }
 }
 
