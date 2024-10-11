@@ -33,7 +33,9 @@ use crate::{
 };
 
 pub(crate) type VideoStream =
-    Pin<Box<dyn Stream<Item = (ParticipantIdentity, TrackSid, I420Buffer)> + Send>>;
+    Pin<Box<dyn Stream<Item = (ParticipantIdentity, TrackSid, Option<I420Buffer>)> + Send>>;
+
+pub(crate) type NewVideoStream = (ParticipantIdentity, TrackSid, VideoStream);
 
 pub(crate) struct VideoPipeline {
     pub(crate) base_image: Vec<u8>,
@@ -42,9 +44,10 @@ pub(crate) struct VideoPipeline {
 
     pub(crate) shared: Arc<Mutex<Shared>>,
 
-    pub(crate) video_streams_rx: mpsc::Receiver<VideoStream>,
+    pub(crate) video_streams_rx: mpsc::Receiver<NewVideoStream>,
     pub(crate) video_sources: SelectAll<VideoStream>,
     pub(crate) video_frames: HashMap<TrackSid, I420Buffer>,
+    pub(crate) tracks: HashMap<TrackSid, ParticipantIdentity>,
 
     pub(crate) start: Instant,
 }
@@ -54,7 +57,7 @@ impl VideoPipeline {
         start: Instant,
         shared: Arc<Mutex<Shared>>,
         shutdown_channel: broadcast::Receiver<()>,
-    ) -> Result<(mpsc::Sender<VideoStream>, JoinHandle<()>)> {
+    ) -> Result<(mpsc::Sender<NewVideoStream>, JoinHandle<()>)> {
         let background_image =
             image::load_from_memory(include_bytes!("../assets/background.png")).unwrap();
         let logo_image =
@@ -119,6 +122,7 @@ impl VideoPipeline {
                 video_streams_rx,
                 video_frames: HashMap::default(),
                 video_sources: SelectAll::default(),
+                tracks: HashMap::default(),
                 start,
             }
             .run(shutdown_channel),
@@ -153,11 +157,19 @@ impl VideoPipeline {
                         .await
                         .expect("Failed to receive self from the blocking threadpool");
                 }
-                Some(stream) = self.video_streams_rx.recv() => {
+                Some((participant_identity, track_sid, stream)) = self.video_streams_rx.recv() => {
+                    self.tracks.insert(track_sid, participant_identity);
                     self.video_sources.push(stream);
                 }
                 Some((_participant_sid, track_sid, video_frame)) = self.video_sources.next() => {
-                    self.video_frames.insert(track_sid, video_frame);
+                    match video_frame {
+                        Some(video_frame) => {
+                            self.video_frames.insert(track_sid, video_frame);
+                        },
+                        None => {
+                            self.video_frames.remove(&track_sid);
+                        },
+                    }
                 }
             }
         }
@@ -205,14 +217,16 @@ impl VideoPipeline {
         // ==== Render All Participants  ====
 
         for (pos, track_sid) in shared.visibles.iter().take(8).enumerate() {
-            let Some((_, participant)) = shared
-                .participants
-                .iter()
-                .find(|(_, participant)| participant.tracks.contains(track_sid))
-            else {
+            let Some(participant_identity) = self.tracks.get(track_sid) else {
+                // TODO: Add logging
+                continue;
+            };
+            let Some(participant) = shared.participants.get(participant_identity) else {
+                // TODO: Add logging
                 continue;
             };
             let Some(video_frame) = self.video_frames.get(track_sid) else {
+                // TODO: Add logging
                 continue;
             };
 
