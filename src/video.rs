@@ -20,6 +20,7 @@ use gst::{Fraction, Sample};
 use image::DynamicImage;
 use livekit::{
     id::{ParticipantIdentity, TrackSid},
+    track::{RemoteVideoTrack, TrackSource},
     webrtc::video_frame::{I420Buffer, VideoBuffer},
 };
 use tokio::{
@@ -29,13 +30,20 @@ use tokio::{
 
 use crate::{
     font::{self, blend_yuv, DrawText, I420Image, Point, SimpleText, TextBox},
-    Shared, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING, WIDTH,
+    Participant, Shared, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING, WIDTH,
 };
 
 pub(crate) type VideoStream =
-    Pin<Box<dyn Stream<Item = (ParticipantIdentity, TrackSid, Option<I420Buffer>)> + Send>>;
+    Pin<Box<dyn Stream<Item = (ParticipantIdentity, TrackSid, I420Buffer)> + Send>>;
 
-pub(crate) type NewVideoStream = (ParticipantIdentity, TrackSid, VideoStream);
+pub(crate) type NewVideoStream = (ParticipantIdentity, RemoteVideoTrack, VideoStream);
+
+pub(crate) enum VideoStreamCommand {
+    Add(NewVideoStream),
+    Remove(ParticipantIdentity),
+    Mute(TrackSid),
+    Unmute(TrackSid),
+}
 
 pub(crate) struct VideoPipeline {
     pub(crate) base_image: Vec<u8>,
@@ -44,12 +52,19 @@ pub(crate) struct VideoPipeline {
 
     pub(crate) shared: Arc<Mutex<Shared>>,
 
-    pub(crate) video_streams_rx: mpsc::Receiver<NewVideoStream>,
+    pub(crate) video_streams_rx: mpsc::Receiver<VideoStreamCommand>,
     pub(crate) video_sources: SelectAll<VideoStream>,
     pub(crate) video_frames: HashMap<TrackSid, I420Buffer>,
-    pub(crate) tracks: HashMap<TrackSid, ParticipantIdentity>,
+    pub(crate) tracks: HashMap<TrackSid, TrackData>,
 
     pub(crate) start: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TrackData {
+    participant_identity: ParticipantIdentity,
+    source: TrackSource,
+    is_muted: bool,
 }
 
 impl VideoPipeline {
@@ -57,7 +72,7 @@ impl VideoPipeline {
         start: Instant,
         shared: Arc<Mutex<Shared>>,
         shutdown_channel: broadcast::Receiver<()>,
-    ) -> Result<(mpsc::Sender<NewVideoStream>, JoinHandle<()>)> {
+    ) -> Result<(mpsc::Sender<VideoStreamCommand>, JoinHandle<()>)> {
         let background_image =
             image::load_from_memory(include_bytes!("../assets/background.png")).unwrap();
         let logo_image =
@@ -157,19 +172,52 @@ impl VideoPipeline {
                         .await
                         .expect("Failed to receive self from the blocking threadpool");
                 }
-                Some((participant_identity, track_sid, stream)) = self.video_streams_rx.recv() => {
-                    self.tracks.insert(track_sid, participant_identity);
-                    self.video_sources.push(stream);
-                }
-                Some((_participant_sid, track_sid, video_frame)) = self.video_sources.next() => {
-                    match video_frame {
-                        Some(video_frame) => {
-                            self.video_frames.insert(track_sid, video_frame);
+                Some(video_stream_command) = self.video_streams_rx.recv() => {
+                    match video_stream_command {
+                        VideoStreamCommand::Add((participant_identity, video_track, stream)) => {
+                            self.tracks.insert(video_track.sid(), TrackData {
+                                participant_identity,
+                                source: video_track.source(),
+                                is_muted: false,
+                            });
+                            self.video_sources.push(stream);
                         },
-                        None => {
+                        VideoStreamCommand::Remove(participant_identity) => {
+                            self.shared.lock().await.participants.remove(&participant_identity);
+                            let tracks = self
+                                .tracks
+                                .clone()
+                                .into_iter()
+                                .filter(|(_, track_data)| track_data.participant_identity == participant_identity);
+
+                            for (track_sid, _) in tracks {
+                                self.video_frames.remove(&track_sid);
+                                self.tracks.remove(&track_sid);
+                            }
+                        }
+                        VideoStreamCommand::Mute(track_sid) => {
+                            if let Some(track) = self.tracks.get_mut(&track_sid) {
+                                track.is_muted = true;
+                            }
                             self.video_frames.remove(&track_sid);
-                        },
+                        }
+                        VideoStreamCommand::Unmute(track_sid) => {
+                            if let Some(track) = self.tracks.get_mut(&track_sid) {
+                                track.is_muted = false;
+                            }
+                        }
                     }
+                }
+                Some((participant_sid, track_sid, video_frame)) = self.video_sources.next() => {
+                    let participant_exists = self.shared.lock().await.participants.contains_key(&participant_sid);
+                    let Some(track_data) = self.tracks.get(&track_sid) else {
+                        continue;
+                    };
+                    if !participant_exists || track_data.is_muted {
+                        continue;
+                    }
+
+                    self.video_frames.insert(track_sid, video_frame);
                 }
             }
         }
@@ -215,21 +263,14 @@ impl VideoPipeline {
         );
 
         // ==== Render All Participants  ====
+        let tracks = get_active_tracks(
+            &self.tracks,
+            &self.video_frames,
+            &shared.participants,
+            &shared.speakers,
+        );
 
-        for (pos, track_sid) in shared.visibles.iter().take(8).enumerate() {
-            let Some(participant_identity) = self.tracks.get(track_sid) else {
-                // TODO: Add logging
-                continue;
-            };
-            let Some(participant) = shared.participants.get(participant_identity) else {
-                // TODO: Add logging
-                continue;
-            };
-            let Some(video_frame) = self.video_frames.get(track_sid) else {
-                // TODO: Add logging
-                continue;
-            };
-
+        for (pos, (participant, video_frame)) in tracks.iter().take(8).enumerate() {
             // Resize image to fit
             let (y, u, v) = video_frame.data();
             let src_image = Image::new(
@@ -242,7 +283,7 @@ impl VideoPipeline {
             )?;
 
             let mut window =
-                calculate_speaker_view(pos, shared.visibles.len().min(8), WIDTH, HEIGHT, PADDING);
+                calculate_speaker_view(pos, tracks.len().min(8), WIDTH, HEIGHT, PADDING);
 
             let original_aspect_ratio = video_frame.width() as f32 / video_frame.height() as f32;
 
@@ -345,6 +386,62 @@ impl VideoPipeline {
 
         Ok(())
     }
+}
+
+fn get_active_tracks<'a>(
+    tracks: &'a HashMap<TrackSid, TrackData>,
+    video_frames: &'a HashMap<TrackSid, I420Buffer>,
+    participants: &'a HashMap<ParticipantIdentity, Participant>,
+    speakers: &HashMap<ParticipantIdentity, Instant>,
+) -> Vec<(&'a Participant, &'a I420Buffer)> {
+    let screen_share_tracks = get_active_tracks_filtered(
+        tracks,
+        video_frames,
+        participants,
+        speakers,
+        TrackSource::Screenshare,
+    );
+    let camera_tracks = get_active_tracks_filtered(
+        tracks,
+        video_frames,
+        participants,
+        speakers,
+        TrackSource::Camera,
+    );
+
+    screen_share_tracks
+        .into_iter()
+        .rev()
+        .chain(camera_tracks)
+        .collect::<Vec<_>>()
+}
+
+fn get_active_tracks_filtered<'a>(
+    tracks: &'a HashMap<TrackSid, TrackData>,
+    video_frames: &'a HashMap<TrackSid, I420Buffer>,
+    participants: &'a HashMap<ParticipantIdentity, Participant>,
+    speakers: &HashMap<ParticipantIdentity, Instant>,
+    source: TrackSource,
+) -> Vec<(&'a Participant, &'a I420Buffer)> {
+    let mut tracks = tracks
+        .iter()
+        .filter(|(_, track_data)| track_data.source == source)
+        .filter_map(|(track_sid, track_data)| {
+            Some((
+                &track_data.participant_identity,
+                participants.get(&track_data.participant_identity)?,
+                video_frames.get(track_sid)?,
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    // Sort the tracks based on the speaker list
+    tracks.sort_by_key(|(participant_identity, _, _)| speakers.get(participant_identity));
+
+    tracks
+        .into_iter()
+        .map(|(_, participant, video_frame)| (participant, video_frame))
+        .collect::<Vec<_>>()
 }
 
 #[derive(Debug)]

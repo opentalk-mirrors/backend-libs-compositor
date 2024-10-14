@@ -4,7 +4,7 @@
 
 #![allow(clippy::module_name_repetitions)]
 
-use std::{collections::HashMap, future::ready, sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use anyhow::{bail, Context, Result};
 use audio::{audio_mixer_task, NativeAudioStreamSource, Silence};
@@ -12,7 +12,7 @@ use audio_nodes::{AudioConvert, AudioMixer};
 use elements::register_all;
 use ezk::nodes::{Access, AccessHandle};
 use ezk_image::{ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, YuvColorInfo};
-use futures::{stream::once, StreamExt};
+use futures::StreamExt;
 use gst::{prelude::*, Clock, ClockTime, Fraction, State, SystemClock};
 use gst_app::AppSrc;
 use livekit::{
@@ -26,7 +26,7 @@ use tokio::{
     sync::{broadcast, mpsc, Mutex},
     task::JoinHandle,
 };
-use video::{NewVideoStream, VideoPipeline};
+use video::{VideoPipeline, VideoStreamCommand};
 
 pub mod audio;
 pub mod debug;
@@ -90,7 +90,7 @@ pub struct Mixer {
     audio_appsrc: Arc<Mutex<Vec<AppSrc>>>,
 
     // Video
-    video_stream_tx: mpsc::Sender<NewVideoStream>,
+    video_stream_tx: mpsc::Sender<VideoStreamCommand>,
     video_task: Option<JoinHandle<()>>,
 
     shutdown_tx: broadcast::Sender<()>,
@@ -99,10 +99,10 @@ pub struct Mixer {
 #[derive(Debug, Clone)]
 struct Shared {
     participants: HashMap<ParticipantIdentity, Participant>,
+    speakers: HashMap<ParticipantIdentity, Instant>,
 
     clock_format: ClockFormat,
     event_title: Option<String>,
-    visibles: Vec<TrackSid>,
     appsrc: Vec<AppSrc>,
 }
 
@@ -151,9 +151,9 @@ impl Mixer {
 
         let shared = Arc::new(Mutex::new(Shared {
             participants: HashMap::default(),
+            speakers: HashMap::new(),
             clock_format: parameters.clock_format,
             event_title: None,
-            visibles: Vec::default(),
             appsrc: Vec::default(),
         }));
 
@@ -199,81 +199,54 @@ impl Mixer {
     }
 
     async fn handle_livekit_event(&mut self, event: livekit::RoomEvent) -> Result<()> {
+        log::debug!("LiveKit event received: {event:?}");
         match event {
             RoomEvent::TrackSubscribed {
                 track,
                 publication: _,
                 participant,
-            } => {
-                log::info!("track subscribed: {track:?}");
-                match track {
-                    RemoteTrack::Audio(audio_track) => {
-                        self.add_audio_track(audio_track).await;
-                    }
-                    RemoteTrack::Video(video_track) => {
-                        self.add_video_track(participant, video_track).await;
-                    }
+            } => match track {
+                RemoteTrack::Audio(audio_track) => {
+                    self.add_audio_track(audio_track).await;
                 }
-            }
-            RoomEvent::TrackUnsubscribed {
-                track,
-                publication: _,
-                participant: _,
-            } => {
-                log::info!("track subscribed: {track:?}");
-                self.shared
-                    .lock()
-                    .await
-                    .visibles
-                    .retain(|t| t != &track.sid());
-            }
+                RemoteTrack::Video(video_track) => {
+                    self.add_video_track(participant, video_track).await;
+                }
+            },
             RoomEvent::ActiveSpeakersChanged { speakers } => {
-                log::info!("active speaker changed: {speakers:?}");
                 self.handle_active_speakers_changed(speakers).await?;
             }
             RoomEvent::TrackMuted {
-                participant,
+                participant: _,
                 publication,
             } => {
-                log::info!("track muted: {participant:?}");
-                self.shared
-                    .lock()
+                self.video_stream_tx
+                    .send(VideoStreamCommand::Mute(publication.sid()))
                     .await
-                    .visibles
-                    .retain(|track_sid| track_sid != &publication.sid());
+                    .expect("unable to send video stream mute event");
             }
             RoomEvent::TrackUnmuted {
-                participant,
+                participant: _,
                 publication,
             } => {
-                log::info!("track unmuted: {participant:?}");
-                let mut shared = self.shared.lock().await;
-                if shared.participants.contains_key(&participant.identity()) {
-                    shared.visibles.push(publication.sid());
-                }
+                self.video_stream_tx
+                    .send(VideoStreamCommand::Unmute(publication.sid()))
+                    .await
+                    .expect("unable to send video stream unmute event");
             }
             RoomEvent::TrackPublished {
                 publication,
                 participant,
             } => {
-                log::info!("track published: {participant:?}");
-                if self
-                    .shared
-                    .lock()
-                    .await
-                    .participants
-                    .contains_key(&participant.identity())
-                {
+                let shared = self.shared.lock().await;
+                if shared.participants.contains_key(&participant.identity()) {
                     publication.set_subscribed(true);
                 }
             }
             RoomEvent::ParticipantDisconnected(participant) => {
-                log::info!("participant disconnected: {participant:?}");
                 self.remove_participant(&participant.identity()).await;
             }
-            other => {
-                log::trace!("other event: {other:?}");
-            }
+            _ => {}
         }
 
         Ok(())
@@ -285,48 +258,10 @@ impl Mixer {
     ) -> Result<()> {
         let shared = &mut *self.shared.lock().await;
 
-        if shared.visibles.len() <= 2 {
-            return Ok(());
-        }
-
-        let active_speakers = speakers.iter().filter(|speaker| {
-            shared.participants.contains_key(&speaker.identity()) && speaker.is_speaking()
-        });
-
-        for participant in active_speakers {
-            let screen_share_tracks = participant
-                .track_publications()
-                .into_iter()
-                .filter(|(_, track_publication)| {
-                    track_publication.source() == TrackSource::Screenshare
-                })
-                .map(|(track_sid, _)| track_sid)
-                .collect::<Vec<_>>();
-
-            // FIXME: This is missing a filter over screenshare tracks
-            let latest_screen_share_position = shared
-                .visibles
-                .iter()
-                .enumerate()
-                .last()
-                .map(|(index, _)| index);
-
-            let camera_tracks = participant
-                .track_publications()
-                .into_iter()
-                .filter(|(_, track_publication)| track_publication.source() == TrackSource::Camera)
-                .map(|(track_sid, _)| track_sid);
-
-            for track_sid in screen_share_tracks {
-                shared.visibles.retain(|self_| self_ != &track_sid);
-                shared.visibles.insert(0, track_sid.clone());
-            }
-
-            for track_sid in camera_tracks {
-                shared.visibles.retain(|self_| self_ != &track_sid);
-                let index = latest_screen_share_position.unwrap_or_default();
-                shared.visibles.insert(index, track_sid);
-            }
+        for participant in speakers {
+            shared
+                .speakers
+                .insert(participant.identity(), Instant::now());
         }
 
         Ok(())
@@ -494,33 +429,22 @@ impl Mixer {
         participant: RemoteParticipant,
         video_track: RemoteVideoTrack,
     ) {
-        let mut shared = self.shared.lock().await;
-        if video_track.source() == TrackSource::Screenshare {
-            shared.visibles.insert(0, video_track.sid());
-        } else {
-            shared.visibles.push(video_track.sid());
-        }
-
-        let end_signal = (participant.identity(), video_track.sid(), None);
-
         self.video_stream_tx
-            .send((
+            .send(VideoStreamCommand::Add((
                 participant.identity(),
-                video_track.sid(),
+                video_track.clone(),
                 Box::pin(
-                    NativeVideoStream::new(video_track.rtc_track())
-                        .map(move |frame| {
-                            (
-                                participant.identity(),
-                                video_track.sid(),
-                                Some(frame.buffer.to_i420()),
-                            )
-                        })
-                        .chain(once(ready(end_signal))),
+                    NativeVideoStream::new(video_track.rtc_track()).map(move |frame| {
+                        (
+                            participant.identity(),
+                            video_track.sid(),
+                            frame.buffer.to_i420(),
+                        )
+                    }),
                 ),
-            ))
+            )))
             .await
-            .expect("unable to send add event to video_pipeline_commands_tx");
+            .expect("unable to send add event to video_stream_tx");
     }
 
     pub async fn add_participant(&mut self, identity: ParticipantIdentity, display_name: String) {
@@ -539,15 +463,16 @@ impl Mixer {
         }
     }
 
+    /// # Panics
+    ///
+    /// This can fail if the event could not be send to internal the channel.
     pub async fn remove_participant(&mut self, identity: &ParticipantIdentity) {
-        log::debug!("Add participant {identity:?}");
-        let mut shared = self.shared.lock().await;
-        if let Some(remote_participant) = self.room.remote_participants().get(identity) {
-            for (track_sid, track_publication) in remote_participant.track_publications() {
-                track_publication.set_subscribed(false);
-                shared.visibles.retain(|t| t != &track_sid);
-            }
-        }
+        log::debug!("Remove participant {identity:?}");
+
+        self.video_stream_tx
+            .send(VideoStreamCommand::Remove(identity.to_owned()))
+            .await
+            .expect("unable to send add remove event to video_stream_tx");
     }
 }
 
