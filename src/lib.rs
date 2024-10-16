@@ -75,6 +75,8 @@ pub const OFFSET_TOP: usize = 40;
 
 pub struct Mixer {
     video_support: bool,
+    auto_subscribe: bool,
+
     sinks: HashMap<String, ActiveSink>,
     system_clock: Clock,
 
@@ -120,6 +122,7 @@ pub(crate) struct Participant {
 
 pub struct MixerParameters {
     pub video_support: bool,
+    pub auto_subscribe: bool,
     pub clock_format: ClockFormat,
     pub livekit_url: String,
     pub livekit_api_key: String,
@@ -173,6 +176,7 @@ impl Mixer {
 
         let mixer = Self {
             video_support: parameters.video_support,
+            auto_subscribe: parameters.auto_subscribe,
             sinks: HashMap::default(),
             system_clock: SystemClock::obtain(),
             room,
@@ -191,6 +195,13 @@ impl Mixer {
     // TODO: This will be fixed later on
     #[allow(clippy::missing_errors_doc)]
     pub async fn run(&mut self) -> Result<()> {
+        if self.auto_subscribe {
+            for participant in self.room.remote_participants().values() {
+                self.add_participant(participant.identity(), participant.name())
+                    .await;
+            }
+        }
+
         while let Some(event) = self.room_events.recv().await {
             self.handle_livekit_event(event).await?;
         }
@@ -241,6 +252,12 @@ impl Mixer {
                 let shared = self.shared.lock().await;
                 if shared.participants.contains_key(&participant.identity()) {
                     publication.set_subscribed(true);
+                }
+            }
+            RoomEvent::ParticipantConnected(participant) => {
+                if self.auto_subscribe {
+                    self.add_participant(participant.identity(), participant.name())
+                        .await;
                 }
             }
             RoomEvent::ParticipantDisconnected(participant) => {

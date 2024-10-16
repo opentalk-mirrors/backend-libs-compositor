@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mixer_parameters = MixerParameters {
         video_support: true,
+        auto_subscribe: true,
         clock_format: Default::default(),
         livekit_url,
         livekit_api_key,
