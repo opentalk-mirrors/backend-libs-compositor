@@ -16,12 +16,10 @@ use crate::{
     GstPadErrorExt,
 };
 
-mod fake;
 mod rtmp;
 mod system;
 mod webm;
 
-pub use fake::*;
 pub use rtmp::*;
 pub use system::*;
 pub use webm::*;
