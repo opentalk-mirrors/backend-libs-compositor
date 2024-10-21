@@ -9,7 +9,8 @@ use serde::Deserialize;
 use tokio::sync::broadcast;
 
 use crate::{
-    add_ghost_pad, parse_bin_from_description_with_context, EncoderType, GstBinErrorExt, Sink,
+    add_ghost_pad, parse_bin_from_description_with_context, EncoderType, GStreamerSink,
+    GstBinErrorExt,
 };
 
 #[derive(Debug)]
@@ -137,7 +138,7 @@ impl WebMSink {
     }
 }
 
-impl Sink for WebMSink {
+impl GStreamerSink for WebMSink {
     #[must_use]
     fn video(&self) -> Option<GhostPad> {
         Some(self.video_sink.clone())

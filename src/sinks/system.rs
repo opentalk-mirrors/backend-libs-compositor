@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use gst::{Bin, GhostPad};
 
-use crate::{add_ghost_pad, parse_bin_from_description_with_context, Sink};
+use crate::{add_ghost_pad, parse_bin_from_description_with_context, GStreamerSink};
 
 /// Displays compositor output on the screen.
 #[derive(Debug)]
@@ -62,7 +62,7 @@ impl SystemSink {
     }
 }
 
-impl Sink for SystemSink {
+impl GStreamerSink for SystemSink {
     /// Get video sink pad.
     #[must_use]
     fn video(&self) -> Option<GhostPad> {

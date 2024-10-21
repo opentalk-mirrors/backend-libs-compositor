@@ -303,7 +303,7 @@ impl Mixer {
 
     // TODO: This will be fixed later on
     #[allow(clippy::missing_errors_doc)]
-    pub async fn link_sink(&mut self, name: &str, sink: impl Sink) -> Result<()> {
+    pub async fn link_sink(&mut self, name: &str, sink: impl GStreamerSink) -> Result<()> {
         trace!("link sink, name: {name}, sinke: {sink:?}");
         if self.sinks.contains_key(name) {
             bail!("a stream with the name '{name}' already exists");

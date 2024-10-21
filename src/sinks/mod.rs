@@ -33,7 +33,7 @@ pub enum EncoderType {
 }
 
 /// Trait of an output sink.
-pub trait Sink: Send + Debug + 'static {
+pub trait GStreamerSink: Send + Debug + 'static {
     /// Get sink pad of the video sink.
     fn video(&self) -> Option<GhostPad>;
 
@@ -57,7 +57,7 @@ pub trait Sink: Send + Debug + 'static {
 pub(crate) struct ActiveSink {
     pub(crate) pipeline: PipelineWatched,
     // The sink needs to be hold until it's dropped at the end
-    pub(crate) inner: Box<dyn Sink>,
+    pub(crate) inner: Box<dyn GStreamerSink>,
     pub(crate) audio_src: AppSrc,
     pub(crate) video_src: Option<AppSrc>,
 }
