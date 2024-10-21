@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use gst::{Bin, GhostPad};
 
-use crate::{add_ghost_pad, parse_bin_from_description_with_context, GStreamerSink};
+use crate::{gstreamer::add_ghost_pad, parse_bin_from_description_with_context, GStreamerSink};
 
 /// Displays compositor output on the screen.
 #[derive(Debug)]

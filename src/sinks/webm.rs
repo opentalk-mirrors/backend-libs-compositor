@@ -9,7 +9,7 @@ use serde::Deserialize;
 use tokio::sync::broadcast;
 
 use crate::{
-    add_ghost_pad, parse_bin_from_description_with_context, EncoderType, GStreamerSink,
+    gstreamer::add_ghost_pad, parse_bin_from_description_with_context, EncoderType, GStreamerSink,
     GstBinErrorExt,
 };
 

@@ -13,15 +13,12 @@ use elements::register_all;
 use ezk::nodes::{Access, AccessHandle};
 use ezk_image::{ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, YuvColorInfo};
 use futures::StreamExt;
-use gst::{prelude::*, Clock, ClockTime, Fraction, State, SystemClock};
-use gst_app::AppSrc;
+use gstreamer::{GStreamerActiveSink, GStreamerSink};
 use livekit::{
     prelude::*,
     webrtc::{audio_stream::native::NativeAudioStream, video_stream::native::NativeVideoStream},
 };
 use livekit_api::access_token::{AccessToken, AccessTokenError, VideoGrants};
-use pipeline_watched::PipelineWatched;
-use sinks::GStreamerActiveSink;
 use tokio::{
     sync::{broadcast, mpsc, Mutex},
     task::JoinHandle,
@@ -33,6 +30,7 @@ pub mod debug;
 pub mod elements;
 pub mod font;
 pub mod gst_with_context;
+pub mod gstreamer;
 pub mod pipeline_watched;
 pub mod sinks;
 pub mod video;
@@ -62,6 +60,7 @@ impl AsRef<str> for ClockFormat {
 
 pub const WIDTH: usize = 1920;
 pub const HEIGHT: usize = 1080;
+pub const FRAMES_PER_SECOND: usize = 25;
 
 /// The amount of pixels for borders
 pub(crate) const BORDER: usize = 4;
@@ -77,11 +76,12 @@ pub const PADDING: usize = 16;
 pub const OFFSET_TOP: usize = 40;
 
 pub struct Mixer {
+    start: Instant,
+
     video_support: bool,
     auto_subscribe: bool,
 
-    sinks: HashMap<String, GStreamerActiveSink>,
-    system_clock: Clock,
+    sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
 
     room: Room,
     // LiveKitRoom events
@@ -92,7 +92,6 @@ pub struct Mixer {
 
     // Audio
     audio_mixer_handle: Arc<Mutex<AccessHandle<AudioMixer>>>,
-    audio_appsrc: Arc<Mutex<Vec<AppSrc>>>,
 
     // Video
     video_stream_tx: mpsc::Sender<VideoStreamCommand>,
@@ -114,7 +113,6 @@ struct Shared {
 
     clock_format: ClockFormat,
     event_title: Option<String>,
-    appsrc: Vec<AppSrc>,
 }
 
 // FIXME
@@ -166,7 +164,6 @@ impl Mixer {
             speakers: HashMap::new(),
             clock_format: parameters.clock_format,
             event_title: None,
-            appsrc: Vec::default(),
         }));
 
         let start = Instant::now();
@@ -175,24 +172,23 @@ impl Mixer {
         let (access, audio_mixer_handle) =
             Access::new(AudioMixer::new(AudioConvert::new(Silence::default())));
         let audio_mixer_handle = Arc::new(Mutex::new(audio_mixer_handle));
-        let audio_appsrc = Arc::new(Mutex::new(Vec::<AppSrc>::new()));
-        tokio::spawn(audio_mixer_task(start, access, audio_appsrc.clone()));
+        let sinks = Arc::new(Mutex::new(HashMap::default()));
+        tokio::spawn(audio_mixer_task(access, sinks.clone()));
 
         // Initialize Video Mixer
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let (video_stream_tx, video_task) =
-            VideoPipeline::create(start, shared.clone(), shutdown_rx)?;
+            VideoPipeline::create(sinks.clone(), shared.clone(), shutdown_rx)?;
 
         let mixer = Self {
+            start,
             video_support: parameters.video_support,
             auto_subscribe: parameters.auto_subscribe,
-            sinks: HashMap::default(),
-            system_clock: SystemClock::obtain(),
+            sinks,
             room,
             room_events,
             shared,
             audio_mixer_handle,
-            audio_appsrc,
             video_stream_tx,
             video_task: Some(video_task),
             shutdown_tx,
@@ -303,142 +299,43 @@ impl Mixer {
 
     // TODO: This will be fixed later on
     #[allow(clippy::missing_errors_doc)]
-    pub async fn link_sink(&mut self, name: &str, sink: impl GStreamerSink) -> Result<()> {
-        trace!("link sink, name: {name}, sinke: {sink:?}");
-        if self.sinks.contains_key(name) {
+    pub async fn link_gstreamer_sink(
+        &mut self,
+        name: &str,
+        sink: impl GStreamerSink,
+    ) -> Result<()> {
+        trace!("link sink, name: {name}, sink: {sink:?}");
+
+        let mut sinks = self.sinks.lock().await;
+        if sinks.contains_key(name) {
             bail!("a stream with the name '{name}' already exists");
         }
 
-        let pipeline = PipelineWatched::new(name, sink.init_bus_watch(), sink.requires_eos())
-            .context("unable to create PipelineWatched")?;
+        let active_sink = GStreamerActiveSink::new(self.start, self.video_support, name, sink)?;
 
-        pipeline.use_clock(Some(&self.system_clock));
-        pipeline.set_base_time(ClockTime::ZERO);
-        pipeline.set_start_time(None);
-
-        let bin = sink.bin();
-        pipeline.add_with_context(&bin)?;
-
-        let audio_src = AppSrc::builder()
-            .name("audiosrc")
-            .caps(
-                &gst::Caps::builder("audio/x-raw")
-                    .field("format", "S16LE")
-                    .field("layout", "interleaved")
-                    .field("rate", 48_000)
-                    .field("channels", 2)
-                    .build(),
-            )
-            .min_latency(200_000_000i64)
-            .format(gst::Format::Time)
-            .max_bytes(1)
-            .block(true)
-            .is_live(true)
-            .build();
-
-        self.audio_appsrc.lock().await.push(audio_src.clone());
-
-        let video_src = if self.video_support {
-            let video_src = AppSrc::builder()
-                .name("videosrc")
-                .caps(
-                    &gst::Caps::builder("video/x-raw")
-                        .field("format", "I420")
-                        .field("width", 1920)
-                        .field("height", 1080)
-                        .field("framerate", Fraction::new(25, 1))
-                        .build(),
-                )
-                .min_latency(200_000_000i64)
-                .format(gst::Format::Time)
-                .max_bytes(1)
-                .block(true)
-                .is_live(true)
-                .build();
-
-            self.shared.lock().await.appsrc.push(video_src.clone());
-
-            Some(video_src)
-        } else {
-            None
-        };
-
-        let active_sink = GStreamerActiveSink {
-            pipeline,
-            inner: Box::new(sink),
-            audio_src,
-            video_src,
-        };
-
-        active_sink
-            .link_audio_mixer()
-            .context("unable to link AudioMixer to sink")?;
-
-        if self.video_support {
-            active_sink
-                .link_video_mixer()
-                .context("unable to link VideoMixer to sink")?;
-        }
-
-        active_sink
-            .pipeline
-            .set_state_with_context(State::Playing)?;
-        active_sink
-            .inner
-            .bin()
-            .set_state_with_context(State::Playing)?;
-        active_sink
-            .pipeline
-            .sync_children_states()
-            .context("unable to sync children states for pipeline")?;
-
-        debug::debug_dot(
-            &*active_sink.pipeline,
-            format!("link-sink_sink-pipeline_{name}").as_str(),
-        );
-
-        self.sinks.insert(name.to_owned(), active_sink);
+        sinks.insert(name.to_owned(), Box::new(active_sink));
 
         Ok(())
     }
 
-    /// Add a callback function to the bus watch of the given sink.
-    ///
-    /// # Errors
-    ///
-    /// This can fail if the sink doesn't exists or if the callback cannot be
-    /// added to the bus watch.
-    pub fn add_watch_to_sink<F>(&self, name: &str, callback: F) -> Result<()>
-    where
-        F: FnMut(&gst::Pipeline, gst::MessageView) + Send + Sync + 'static,
-    {
-        let Some(active_sink) = self.sinks.get(name) else {
-            bail!("there is no sink with the name {name}");
-        };
+    // TODO: This will be fixed later on
+    #[allow(clippy::missing_errors_doc)]
+    pub async fn link_sink(&mut self, name: &str, sink: Box<dyn Sink>) -> Result<()> {
+        trace!("link sink, name: {name}, sink: {sink:?}");
 
-        active_sink.pipeline.add_watch(callback);
+        let mut sinks = self.sinks.lock().await;
+        if sinks.contains_key(name) {
+            bail!("a stream with the name '{name}' already exists");
+        }
+
+        sinks.insert(name.to_owned(), sink);
 
         Ok(())
     }
 
     pub async fn release_sink(&mut self, name: &String) {
         trace!("release_sink {name}");
-        if let Some(mut sink) = self.sinks.remove(name) {
-            self.audio_appsrc
-                .lock()
-                .await
-                .retain(|appsrc| sink.audio_src.name() != appsrc.name());
-
-            if let Some(video_src) = &sink.video_src {
-                self.shared
-                    .lock()
-                    .await
-                    .appsrc
-                    .retain(|appsrc| video_src.name() != appsrc.name());
-            }
-
-            sink.pipeline.drop().await;
-        }
+        self.sinks.lock().await.remove(name);
     }
 
     pub async fn set_event_title(&mut self, title: String) {
@@ -527,9 +424,7 @@ impl Drop for Mixer {
                 }
 
                 log::debug!("Drop all active sinks");
-                for (_, mut sink_pipeline) in self.sinks.drain() {
-                    sink_pipeline.pipeline.drop().await;
-                }
+                self.sinks.lock().await.drain();
             });
         });
     }

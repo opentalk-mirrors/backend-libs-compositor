@@ -2,21 +2,15 @@
 //
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
-    collections::HashMap,
-    pin::Pin,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Local;
 use ezk_image::{
     resize::{FilterType, ResizeAlg, Resizer},
     Image, PixelFormat, PixelFormatPlanes, Window,
 };
 use futures::{stream::SelectAll, Stream, StreamExt};
-use gst::{Fraction, Sample};
 use image::DynamicImage;
 use livekit::{
     id::{ParticipantIdentity, TrackSid},
@@ -30,7 +24,8 @@ use tokio::{
 
 use crate::{
     font::{self, blend_yuv, DrawText, I420Image, Point, SimpleText, TextBox},
-    Participant, Shared, SpeakingState, BORDER, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING, WIDTH,
+    Participant, Shared, Sink, SpeakingState, BORDER, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING,
+    WIDTH,
 };
 
 pub(crate) type VideoStream =
@@ -50,14 +45,13 @@ pub(crate) struct VideoPipeline {
     pub(crate) resizer: Resizer,
     pub(crate) resize_staging_buffer: Vec<u8>,
 
+    pub(crate) sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
     pub(crate) shared: Arc<Mutex<Shared>>,
 
     pub(crate) video_streams_rx: mpsc::Receiver<VideoStreamCommand>,
     pub(crate) video_sources: SelectAll<VideoStream>,
     pub(crate) video_frames: HashMap<TrackSid, I420Buffer>,
     pub(crate) tracks: HashMap<TrackSid, TrackData>,
-
-    pub(crate) start: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +63,7 @@ pub(crate) struct TrackData {
 
 impl VideoPipeline {
     pub(crate) fn create(
-        start: Instant,
+        sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
         shared: Arc<Mutex<Shared>>,
         shutdown_channel: broadcast::Receiver<()>,
     ) -> Result<(mpsc::Sender<VideoStreamCommand>, JoinHandle<()>)> {
@@ -133,12 +127,12 @@ impl VideoPipeline {
                 base_image,
                 resizer: Resizer::new(ResizeAlg::Interpolation(FilterType::Bilinear)),
                 resize_staging_buffer: vec![0u8; PixelFormat::I420.buffer_size(WIDTH, HEIGHT)],
+                sinks,
                 shared,
                 video_streams_rx,
                 video_frames: HashMap::default(),
                 video_sources: SelectAll::default(),
                 tracks: HashMap::default(),
-                start,
             }
             .run(shutdown_channel),
         );
@@ -381,32 +375,9 @@ impl VideoPipeline {
 
         // ==== push image into GStreamer pipeline ====
 
-        let mut buffer = gst::Buffer::with_size(base_image.len())?;
-        let mut_buffer = buffer.make_mut();
-        mut_buffer
-            .copy_from_slice(0, &base_image)
-            .ok()
-            .context("unable to copy from slice")?;
-        mut_buffer.set_pts(gst::ClockTime::from_mseconds(
-            Instant::now().duration_since(self.start).as_millis() as u64,
-        ));
-
-        let sample = Sample::builder()
-            .buffer(&buffer)
-            .caps(
-                &gst::Caps::builder("video/x-raw")
-                    .field("format", "I420")
-                    .field("width", 1920)
-                    .field("height", 1080)
-                    .field("framerate", Fraction::new(25, 1))
-                    .build(),
-            )
-            .build();
-
-        for appsrc in &shared.appsrc {
-            log::trace!("Push video sample: {sample:?}");
-            if let Err(err) = appsrc.push_sample(&sample) {
-                log::error!("Unable to push video sample {sample:?}, received: {err:?}");
+        for sink in self.sinks.blocking_lock().values_mut() {
+            if let Err(err) = sink.on_video_frame(base_image.clone()) {
+                log::error!("Unable to push video: {err:?}");
             }
         }
 
