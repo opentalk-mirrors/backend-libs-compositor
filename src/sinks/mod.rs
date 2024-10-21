@@ -52,7 +52,7 @@ pub trait GStreamerSink: Send + Debug + 'static {
 }
 
 #[derive(Debug)]
-pub(crate) struct ActiveSink {
+pub(crate) struct GStreamerActiveSink {
     pub(crate) pipeline: PipelineWatched,
     // The sink needs to be hold until it's dropped at the end
     pub(crate) inner: Box<dyn GStreamerSink>,
@@ -60,7 +60,7 @@ pub(crate) struct ActiveSink {
     pub(crate) video_src: Option<AppSrc>,
 }
 
-impl ActiveSink {
+impl GStreamerActiveSink {
     /// Link the given sink to the `audio_mixer`.
     ///
     /// # Errors

@@ -21,7 +21,7 @@ use livekit::{
 };
 use livekit_api::access_token::{AccessToken, AccessTokenError, VideoGrants};
 use pipeline_watched::PipelineWatched;
-use sinks::ActiveSink;
+use sinks::GStreamerActiveSink;
 use tokio::{
     sync::{broadcast, mpsc, Mutex},
     task::JoinHandle,
@@ -80,7 +80,7 @@ pub struct Mixer {
     video_support: bool,
     auto_subscribe: bool,
 
-    sinks: HashMap<String, ActiveSink>,
+    sinks: HashMap<String, GStreamerActiveSink>,
     system_clock: Clock,
 
     room: Room,
@@ -363,7 +363,7 @@ impl Mixer {
             None
         };
 
-        let active_sink = ActiveSink {
+        let active_sink = GStreamerActiveSink {
             pipeline,
             inner: Box::new(sink),
             audio_src,
