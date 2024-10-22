@@ -30,7 +30,7 @@ use tokio::{
 
 use crate::{
     font::{self, blend_yuv, DrawText, I420Image, Point, SimpleText, TextBox},
-    Participant, Shared, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING, WIDTH,
+    Participant, Shared, SpeakingState, BORDER, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING, WIDTH,
 };
 
 pub(crate) type VideoStream =
@@ -270,22 +270,23 @@ impl VideoPipeline {
             &shared.speakers,
         );
 
-        for (pos, (participant, video_frame)) in tracks.iter().take(8).enumerate() {
+        let tracks_len = tracks.len();
+        for (pos, active_track) in tracks.into_iter().take(8).enumerate() {
             // Resize image to fit
-            let (y, u, v) = video_frame.data();
+            let (y, u, v) = active_track.i420_video.data();
             let src_image = Image::new(
                 PixelFormat::I420,
                 PixelFormatPlanes::I420 { y, u, v },
-                video_frame.width() as usize,
-                video_frame.height() as usize,
+                active_track.i420_video.width() as usize,
+                active_track.i420_video.height() as usize,
                 I420_COLOR,
                 8,
             )?;
 
-            let mut window =
-                calculate_speaker_view(pos, tracks.len().min(8), WIDTH, HEIGHT, PADDING);
+            let mut window = calculate_speaker_view(pos, tracks_len.min(8), WIDTH, HEIGHT, PADDING);
 
-            let original_aspect_ratio = video_frame.width() as f32 / video_frame.height() as f32;
+            let original_aspect_ratio =
+                active_track.i420_video.width() as f32 / active_track.i420_video.height() as f32;
 
             let w = (window.width as f32).min(window.height as f32 / (1. / original_aspect_ratio));
             let h = (window.height as f32).min(window.width as f32 / original_aspect_ratio);
@@ -310,6 +311,31 @@ impl VideoPipeline {
             )?;
 
             self.resizer.resize(src_image, resize_staging_image)?;
+
+            // ====== Render speaker overlay ======
+            let overlay = Window {
+                x: window.x.saturating_sub(BORDER),
+                y: window.y.saturating_sub(BORDER),
+                width: window.width + BORDER,
+                height: window.height + BORDER,
+            };
+
+            {
+                let mut base_image =
+                    font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
+
+                let col = if active_track.is_speaking {
+                    YuvColor::rgb_to_yuv(209, 229, 69)
+                } else {
+                    YuvColor::rgb_to_yuv(32, 67, 79)
+                };
+
+                horizontal_line(&mut base_image, overlay, &col, BORDER, 0);
+                horizontal_line(&mut base_image, overlay, &col, BORDER, overlay.height);
+
+                vertical_line(&mut base_image, overlay, &col, WIDTH, BORDER, 0);
+                vertical_line(&mut base_image, overlay, &col, WIDTH, BORDER, overlay.width);
+            }
 
             // Copy image into buffer
 
@@ -342,7 +368,7 @@ impl VideoPipeline {
             let mut base_image_i420 =
                 font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
-            let simple_text = SimpleText::new(24.0, &participant.display_name);
+            let simple_text = SimpleText::new(24.0, &active_track.participant.display_name);
             let text_box = TextBox::new(simple_text);
             text_box.draw(
                 Point::new(
@@ -388,12 +414,75 @@ impl VideoPipeline {
     }
 }
 
+fn vertical_line(
+    base_image_i420: &mut I420Image<'_>,
+    overlay: Window,
+    col: &YuvColor,
+    width: usize,
+    border: usize,
+    x_offset: usize,
+) {
+    let stride = width / border;
+
+    for y in base_image_i420
+        .get_luma_range(overlay.x + x_offset, overlay.y, width * overlay.height)
+        .chunks_mut(border)
+        .step_by(stride)
+    {
+        y.fill(col.y as u8);
+    }
+    for u in base_image_i420
+        .get_chroma_u_range(overlay.x + x_offset, overlay.y, width * overlay.height / 2)
+        .chunks_mut(border / 2)
+        .step_by(stride)
+    {
+        u.fill(col.u as u8);
+    }
+    for v in base_image_i420
+        .get_chroma_v_range(overlay.x + x_offset, overlay.y, width * overlay.height / 2)
+        .chunks_mut(border / 2)
+        .step_by(stride)
+    {
+        v.fill(col.v as u8);
+    }
+}
+
+fn horizontal_line(
+    base_image_i420: &mut I420Image<'_>,
+    overlay: Window,
+    col: &YuvColor,
+    border: usize,
+    y_offset: usize,
+) {
+    for i in 0..border {
+        base_image_i420
+            .get_luma_range(overlay.x, overlay.y + y_offset + i, overlay.width + border)
+            .fill(col.y as u8);
+    }
+    for i in 0..border {
+        base_image_i420
+            .get_chroma_u_range(overlay.x, overlay.y + y_offset + i, overlay.width + border)
+            .fill(col.u as u8);
+    }
+    for i in 0..border {
+        base_image_i420
+            .get_chroma_v_range(overlay.x, overlay.y + y_offset + i, overlay.width + border)
+            .fill(col.v as u8);
+    }
+}
+
+struct ActiveTracks<'a> {
+    participant: &'a Participant,
+    i420_video: &'a I420Buffer,
+    is_speaking: bool,
+}
+
 fn get_active_tracks<'a>(
     tracks: &'a HashMap<TrackSid, TrackData>,
     video_frames: &'a HashMap<TrackSid, I420Buffer>,
     participants: &'a HashMap<ParticipantIdentity, Participant>,
-    speakers: &HashMap<ParticipantIdentity, Instant>,
-) -> Vec<(&'a Participant, &'a I420Buffer)> {
+    speakers: &HashMap<ParticipantIdentity, SpeakingState>,
+) -> Vec<ActiveTracks<'a>> {
     let screen_share_tracks = get_active_tracks_filtered(
         tracks,
         video_frames,
@@ -413,16 +502,21 @@ fn get_active_tracks<'a>(
         .into_iter()
         .rev()
         .chain(camera_tracks)
-        .collect::<Vec<_>>()
+        .map(|(participant, i420_video, is_speaking)| ActiveTracks {
+            participant,
+            i420_video,
+            is_speaking,
+        })
+        .collect::<_>()
 }
 
 fn get_active_tracks_filtered<'a>(
     tracks: &'a HashMap<TrackSid, TrackData>,
     video_frames: &'a HashMap<TrackSid, I420Buffer>,
     participants: &'a HashMap<ParticipantIdentity, Participant>,
-    speakers: &HashMap<ParticipantIdentity, Instant>,
+    speakers: &HashMap<ParticipantIdentity, SpeakingState>,
     source: TrackSource,
-) -> Vec<(&'a Participant, &'a I420Buffer)> {
+) -> Vec<(&'a Participant, &'a I420Buffer, bool)> {
     let mut tracks = tracks
         .iter()
         .filter(|(_, track_data)| track_data.source == source)
@@ -431,16 +525,23 @@ fn get_active_tracks_filtered<'a>(
                 &track_data.participant_identity,
                 participants.get(&track_data.participant_identity)?,
                 video_frames.get(track_sid)?,
+                speakers
+                    .get(&track_data.participant_identity)
+                    .is_some_and(|state| state.is_speaking),
             ))
         })
         .collect::<Vec<_>>();
 
     // Sort the tracks based on the speaker list
-    tracks.sort_by_key(|(participant_identity, _, _)| speakers.get(participant_identity));
+    tracks.sort_by_key(|(participant_identity, _, _, _)| {
+        speakers
+            .get(participant_identity)
+            .map(|state| state.last_event)
+    });
 
     tracks
         .into_iter()
-        .map(|(_, participant, video_frame)| (participant, video_frame))
+        .map(|(_, participant, video_frame, is_speaking)| (participant, video_frame, is_speaking))
         .collect::<Vec<_>>()
 }
 
@@ -484,16 +585,13 @@ fn render_image(
             let y = y + offset_y;
 
             let yu = base_image.get_luma(x, y);
-            // *yu = (as_yuv.y + 0.5) as u8;
             *yu = blend_yuv(*yu, f32::from(a) / 255., as_yuv.y);
 
             let u = base_image.get_chroma_u(x, y);
-            // *u = (as_yuv.u + 0.5) as u8;
             *u = blend_yuv(*u, f32::from(a) / 255., as_yuv.u);
 
             let v = base_image.get_chroma_v(x, y);
-            // *v = (as_yuv.v + 0.5) as u8;
-            *v = blend_yuv(*v, f32::from(a) / 255_f32, as_yuv.v);
+            *v = blend_yuv(*v, f32::from(a) / 255., as_yuv.v);
         }
     }
 }

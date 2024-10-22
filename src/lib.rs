@@ -63,6 +63,9 @@ impl AsRef<str> for ClockFormat {
 pub const WIDTH: usize = 1920;
 pub const HEIGHT: usize = 1080;
 
+/// The amount of pixels for borders
+pub(crate) const BORDER: usize = 4;
+
 pub const I420_COLOR: ColorInfo = ColorInfo::YUV(YuvColorInfo {
     transfer: ColorTransfer::Linear,
     primaries: ColorPrimaries::BT709,
@@ -99,9 +102,15 @@ pub struct Mixer {
 }
 
 #[derive(Debug, Clone)]
+struct SpeakingState {
+    is_speaking: bool,
+    last_event: Instant,
+}
+
+#[derive(Debug, Clone)]
 struct Shared {
     participants: HashMap<ParticipantIdentity, Participant>,
-    speakers: HashMap<ParticipantIdentity, Instant>,
+    speakers: HashMap<ParticipantIdentity, SpeakingState>,
 
     clock_format: ClockFormat,
     event_title: Option<String>,
@@ -275,10 +284,18 @@ impl Mixer {
     ) -> Result<()> {
         let shared = &mut *self.shared.lock().await;
 
+        for state in shared.speakers.values_mut() {
+            state.is_speaking = false;
+        }
+
         for participant in speakers {
-            shared
-                .speakers
-                .insert(participant.identity(), Instant::now());
+            shared.speakers.insert(
+                participant.identity(),
+                SpeakingState {
+                    is_speaking: true,
+                    last_event: Instant::now(),
+                },
+            );
         }
 
         Ok(())
