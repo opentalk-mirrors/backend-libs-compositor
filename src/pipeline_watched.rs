@@ -187,6 +187,6 @@ fn log_message(
     }
 
     if max_level() >= level {
-        debug::dot(pipeline, &format!("BUS-{level}"));
+        debug::debug_dot(pipeline, &format!("BUS-{level}"));
     }
 }
