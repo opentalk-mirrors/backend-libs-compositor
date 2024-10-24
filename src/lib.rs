@@ -392,7 +392,7 @@ impl Mixer {
             .sync_children_states()
             .context("unable to sync children states for pipeline")?;
 
-        debug::dot(
+        debug::debug_dot(
             &*active_sink.pipeline,
             format!("link-sink_sink-pipeline_{name}").as_str(),
         );
