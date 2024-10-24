@@ -136,28 +136,36 @@ impl PipelineWatched {
     {
         self.callbacks.lock().push(Box::new(callback));
     }
+}
 
-    pub(crate) async fn drop(&mut self) {
-        log::debug!("drop sink {}", self.pipeline.name());
+impl Drop for PipelineWatched {
+    fn drop(&mut self) {
+        log::debug!("Drop PipelineWatched");
 
-        let pipeline_name = self.pipeline.name();
+        tokio::task::block_in_place(move || {
+            tokio::runtime::Handle::current().block_on(async move {
+                log::debug!("drop sink {}", self.pipeline.name());
 
-        debug::debug_dot(&self.pipeline, &format!("drop-{pipeline_name}"));
+                let pipeline_name = self.pipeline.name();
 
-        if let Some(eos) = self.eos.take() {
-            self.pipeline.send_event(gst::event::Eos::new());
+                debug::debug_dot(&self.pipeline, &format!("drop-{pipeline_name}"));
 
-            trace!("wait for eos");
-            if let Err(err) = eos.await {
-                log::error!("unable to wait for the eos, received {err}");
-            }
-        }
+                if let Some(eos) = self.eos.take() {
+                    self.pipeline.send_event(gst::event::Eos::new());
 
-        if let Err(error) = self.pipeline.set_state(gst::State::Null) {
-            log::error!("Unable to set the pipeline to the `Null` state, error: {error}");
-        }
+                    trace!("wait for eos");
+                    if let Err(err) = eos.await {
+                        log::error!("unable to wait for the eos, received {err}");
+                    }
+                }
 
-        log::debug!("drop for pipeline {} is done", pipeline_name);
+                if let Err(error) = self.pipeline.set_state(gst::State::Null) {
+                    log::error!("Unable to set the pipeline to the `Null` state, error: {error}");
+                }
+
+                log::debug!("drop for pipeline {} is done", pipeline_name);
+            });
+        });
     }
 }
 

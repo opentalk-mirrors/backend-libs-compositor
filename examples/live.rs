@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     let mut mixer = Mixer::new(mixer_parameters).await.unwrap();
 
     mixer
-        .link_sink("system", SystemSink::create(true).unwrap())
+        .link_gstreamer_sink("system", SystemSink::create(true).unwrap())
         .await
         .unwrap();
 
@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     })
     .unwrap();
     let mut receiver = webmsink.subscribe();
-    mixer.link_sink("webm", webmsink).await.unwrap();
+    mixer.link_gstreamer_sink("webm", webmsink).await.unwrap();
 
     tokio::spawn(async move {
         loop {
