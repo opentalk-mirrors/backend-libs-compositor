@@ -22,7 +22,7 @@ use tokio::{
 
 use crate::Sink;
 
-pub(crate) struct Silence {
+pub struct Silence {
     timestamp: u64,
     interval: Interval,
 }

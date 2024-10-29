@@ -43,6 +43,8 @@ pub mod pipeline_watched;
 pub use gst_with_context::*;
 pub use sinks::*;
 
+pub use livekit;
+
 #[macro_use]
 extern crate log;
 
@@ -145,6 +147,8 @@ pub struct MixerParameters {
 impl Mixer {
     // TODO: This will be fixed later on
     #[allow(clippy::missing_errors_doc)]
+    // RoomOptions in future livekits will have #[non_exhaustive] making the struct initilization impossible
+    #[allow(clippy::field_reassign_with_default)]
     pub async fn new(parameters: MixerParameters) -> Result<Self> {
         #[cfg(feature = "gstreamer")]
         {
@@ -202,6 +206,10 @@ impl Mixer {
         };
 
         Ok(mixer)
+    }
+
+    pub fn local_participant(&self) -> LocalParticipant {
+        self.room.local_participant()
     }
 
     // TODO: This will be fixed later on

@@ -22,16 +22,16 @@ pub(crate) fn create_font() -> Result<FontArc> {
     .context("font could not be loaded")
 }
 
-pub(crate) struct I420Image<'a> {
+pub struct I420Image<'a> {
     resolution: Point<usize>,
 
-    y: &'a mut [u8],
-    u: &'a mut [u8],
-    v: &'a mut [u8],
+    pub y: &'a mut [u8],
+    pub u: &'a mut [u8],
+    pub v: &'a mut [u8],
 }
 
 impl<'a> I420Image<'a> {
-    pub(crate) fn try_from(img: &'a mut [u8], resolution: Point<usize>) -> Result<I420Image<'a>> {
+    pub fn try_from(img: &'a mut [u8], resolution: Point<usize>) -> Result<I420Image<'a>> {
         let (yv, tmp) = img
             .split_at_mut_checked(resolution.x * resolution.y)
             .context("img smaller than pixel size")?;
@@ -87,7 +87,7 @@ impl<'a> I420Image<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct Point<T> {
+pub struct Point<T> {
     pub x: T,
     pub y: T,
 }
@@ -109,11 +109,11 @@ impl From<Point<usize>> for Rect {
     }
 }
 
-pub(crate) trait DrawText {
+pub trait DrawText {
     fn draw(&self, location: Point<usize>, image: &mut I420Image<'_>);
 }
 
-pub(crate) struct SimpleText {
+pub struct SimpleText {
     font_info: FontArc,
     glyphs: Vec<Glyph>,
     scale: PxScale,
