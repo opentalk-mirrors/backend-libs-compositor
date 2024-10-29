@@ -118,6 +118,8 @@ struct Shared {
 
     clock_format: ClockFormat,
     event_title: Option<String>,
+
+    render_frames: bool,
 }
 
 // FIXME
@@ -173,6 +175,7 @@ impl Mixer {
             speakers: HashMap::new(),
             clock_format: parameters.clock_format,
             event_title: None,
+            render_frames: true,
         }));
 
         #[cfg(feature = "gstreamer")]
@@ -416,6 +419,10 @@ impl Mixer {
             .send(VideoStreamCommand::Remove(identity.to_owned()))
             .await
             .expect("unable to send add remove event to video_stream_tx");
+    }
+
+    pub async fn set_video_support(&mut self, enabled: bool) {
+        self.shared.lock().await.render_frames = enabled;
     }
 }
 

@@ -150,6 +150,9 @@ impl VideoPipeline {
                     return;
                 }
                 _ = rerender_interval.tick() => {
+                    if !self.shared.lock().await.render_frames {
+                        continue;
+                    }
                     // Move self into a blocking threadpool to avoid locking up the tokio runtime while compositing the video
                     let (tx, rx) = oneshot::channel();
                     tokio::task::spawn_blocking(move || {
