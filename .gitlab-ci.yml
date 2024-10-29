@@ -50,6 +50,17 @@ lint:fmt:
   script:
     - cargo +nightly fmt -- --check
 
+lint:check:
+  stage: lint
+  <<: *default_job_condition
+  variables:
+    RUSTFLAGS: -D warnings
+  before_script:
+    - *install_gstreamer_deps
+  script:
+    - cargo check --no-default-features
+    - cargo check --no-default-features --features gstreamer
+
 lint:clippy:
   stage: lint
   <<: *default_job_condition

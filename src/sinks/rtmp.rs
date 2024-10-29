@@ -7,7 +7,8 @@ use gst::{Bin, GhostPad};
 use serde::Deserialize;
 
 use crate::{
-    gstreamer::add_ghost_pad, parse_bin_from_description_with_context, EncoderType, GStreamerSink,
+    gstreamer::{add_ghost_pad, GStreamerSink},
+    parse_bin_from_description_with_context, EncoderType,
 };
 
 const DEFAULT_AUDIO_RATE: usize = 48000;
@@ -128,8 +129,8 @@ impl RTMPSink {
 
 impl GStreamerSink for RTMPSink {
     #[must_use]
-    fn video(&self) -> Option<GhostPad> {
-        Some(self.video_sink_pad.clone())
+    fn video(&self) -> GhostPad {
+        self.video_sink_pad.clone()
     }
 
     #[must_use]

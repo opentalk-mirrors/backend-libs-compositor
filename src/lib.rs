@@ -6,14 +6,12 @@
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use audio::{audio_mixer_task, NativeAudioStreamSource, Silence};
 use audio_nodes::{AudioConvert, AudioMixer};
-use elements::register_all;
 use ezk::nodes::{Access, AccessHandle};
 use ezk_image::{ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, YuvColorInfo};
 use futures::StreamExt;
-use gstreamer::{GStreamerActiveSink, GStreamerSink};
 use livekit::{
     prelude::*,
     webrtc::{audio_stream::native::NativeAudioStream, video_stream::native::NativeVideoStream},
@@ -26,15 +24,22 @@ use tokio::{
 use video::{VideoPipeline, VideoStreamCommand};
 
 pub mod audio;
-pub mod debug;
-pub mod elements;
 pub mod font;
-pub mod gst_with_context;
-pub mod gstreamer;
-pub mod pipeline_watched;
 pub mod sinks;
 pub mod video;
 
+#[cfg(feature = "gstreamer")]
+pub mod debug;
+#[cfg(feature = "gstreamer")]
+pub mod elements;
+#[cfg(feature = "gstreamer")]
+pub mod gst_with_context;
+#[cfg(feature = "gstreamer")]
+pub mod gstreamer;
+#[cfg(feature = "gstreamer")]
+pub mod pipeline_watched;
+
+#[cfg(feature = "gstreamer")]
 pub use gst_with_context::*;
 pub use sinks::*;
 
@@ -76,9 +81,9 @@ pub const PADDING: usize = 16;
 pub const OFFSET_TOP: usize = 40;
 
 pub struct Mixer {
+    #[cfg(feature = "gstreamer")]
     start: Instant,
 
-    video_support: bool,
     auto_subscribe: bool,
 
     sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
@@ -113,6 +118,8 @@ struct Shared {
 
     clock_format: ClockFormat,
     event_title: Option<String>,
+
+    render_frames: bool,
 }
 
 // FIXME
@@ -128,7 +135,6 @@ pub(crate) struct Participant {
 }
 
 pub struct MixerParameters {
-    pub video_support: bool,
     pub auto_subscribe: bool,
     pub clock_format: ClockFormat,
     pub livekit_url: String,
@@ -141,7 +147,12 @@ impl Mixer {
     // TODO: This will be fixed later on
     #[allow(clippy::missing_errors_doc)]
     pub async fn new(parameters: MixerParameters) -> Result<Self> {
-        register_all().context("Unable to register all custom GStreamer Elements")?;
+        #[cfg(feature = "gstreamer")]
+        {
+            use anyhow::Context;
+
+            elements::register_all().context("Unable to register all custom GStreamer Elements")?;
+        }
 
         let token = create_token(
             parameters.livekit_api_key.as_str(),
@@ -164,8 +175,10 @@ impl Mixer {
             speakers: HashMap::new(),
             clock_format: parameters.clock_format,
             event_title: None,
+            render_frames: true,
         }));
 
+        #[cfg(feature = "gstreamer")]
         let start = Instant::now();
 
         // Initialize Audio Mixer
@@ -181,8 +194,8 @@ impl Mixer {
             VideoPipeline::create(sinks.clone(), shared.clone(), shutdown_rx)?;
 
         let mixer = Self {
+            #[cfg(feature = "gstreamer")]
             start,
-            video_support: parameters.video_support,
             auto_subscribe: parameters.auto_subscribe,
             sinks,
             room,
@@ -300,10 +313,11 @@ impl Mixer {
 
     // TODO: This will be fixed later on
     #[allow(clippy::missing_errors_doc)]
+    #[cfg(feature = "gstreamer")]
     pub async fn link_gstreamer_sink(
         &mut self,
         name: &str,
-        sink: impl GStreamerSink,
+        sink: impl gstreamer::GStreamerSink,
     ) -> Result<()> {
         trace!("link sink, name: {name}, sink: {sink:?}");
 
@@ -312,7 +326,7 @@ impl Mixer {
             bail!("a stream with the name '{name}' already exists");
         }
 
-        let active_sink = GStreamerActiveSink::new(self.start, self.video_support, name, sink)?;
+        let active_sink = gstreamer::GStreamerActiveSink::new(self.start, name, sink)?;
 
         sinks.insert(name.to_owned(), Box::new(active_sink));
 
@@ -405,6 +419,10 @@ impl Mixer {
             .send(VideoStreamCommand::Remove(identity.to_owned()))
             .await
             .expect("unable to send add remove event to video_stream_tx");
+    }
+
+    pub async fn set_video_support(&mut self, enabled: bool) {
+        self.shared.lock().await.render_frames = enabled;
     }
 }
 
