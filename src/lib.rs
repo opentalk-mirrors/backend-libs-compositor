@@ -97,6 +97,7 @@ pub struct Mixer {
 
     // Audio
     audio_mixer_handle: Arc<Mutex<AccessHandle<AudioMixer>>>,
+    audio_mixer_task: JoinHandle<()>,
 
     // Video
     video_stream_tx: mpsc::Sender<VideoStreamCommand>,
@@ -178,7 +179,7 @@ impl Mixer {
             Access::new(AudioMixer::new(AudioConvert::new(Silence::default())));
         let audio_mixer_handle = Arc::new(Mutex::new(audio_mixer_handle));
         let sinks = Arc::new(Mutex::new(HashMap::default()));
-        tokio::spawn(audio_mixer_task(access, sinks.clone()));
+        let audio_mixer_task = tokio::spawn(audio_mixer_task(access, sinks.clone()));
 
         // Initialize Video Mixer
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -194,6 +195,7 @@ impl Mixer {
             room_events,
             shared,
             audio_mixer_handle,
+            audio_mixer_task,
             video_stream_tx,
             video_task: Some(video_task),
             shutdown_tx,
@@ -436,6 +438,8 @@ impl Drop for Mixer {
 
                 log::debug!("Drop all active sinks");
                 self.sinks.lock().await.drain();
+
+                self.audio_mixer_task.abort();
             });
         });
     }
