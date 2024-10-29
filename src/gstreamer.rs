@@ -30,7 +30,7 @@ pub trait GStreamerSink: Send + Debug + 'static {
     fn audio(&self) -> GhostPad;
 
     /// Get sink pad of the video sink.
-    fn video(&self) -> Option<GhostPad>;
+    fn video(&self) -> GhostPad;
 
     /// Decides if the bus should not be watched, because the bus watcher is required outside of this sink
     fn init_bus_watch(&self) -> bool {
@@ -50,16 +50,11 @@ pub(crate) struct GStreamerActiveSink {
     // The sink needs to be hold until it's dropped at the end
     pub(crate) inner: Box<dyn GStreamerSink>,
     pub(crate) audio_src: AppSrc,
-    pub(crate) video_src: Option<AppSrc>,
+    pub(crate) video_src: AppSrc,
 }
 
 impl GStreamerActiveSink {
-    pub(crate) fn new(
-        start: Instant,
-        video_support: bool,
-        name: &str,
-        sink: impl GStreamerSink,
-    ) -> Result<Self> {
+    pub(crate) fn new(start: Instant, name: &str, sink: impl GStreamerSink) -> Result<Self> {
         let pipeline = PipelineWatched::new(name, sink.init_bus_watch(), sink.requires_eos())
             .context("unable to create PipelineWatched")?;
 
@@ -87,28 +82,22 @@ impl GStreamerActiveSink {
             .is_live(true)
             .build();
 
-        let video_src = if video_support {
-            let video_src = AppSrc::builder()
-                .name("videosrc")
-                .caps(
-                    &gst::Caps::builder("video/x-raw")
-                        .field("format", "I420")
-                        .field("width", WIDTH as i32)
-                        .field("height", HEIGHT as i32)
-                        .field("framerate", Fraction::new(25, 1))
-                        .build(),
-                )
-                .min_latency(200_000_000i64)
-                .format(gst::Format::Time)
-                .max_bytes(1)
-                .block(true)
-                .is_live(true)
-                .build();
-
-            Some(video_src)
-        } else {
-            None
-        };
+        let video_src = AppSrc::builder()
+            .name("videosrc")
+            .caps(
+                &gst::Caps::builder("video/x-raw")
+                    .field("format", "I420")
+                    .field("width", WIDTH as i32)
+                    .field("height", HEIGHT as i32)
+                    .field("framerate", Fraction::new(25, 1))
+                    .build(),
+            )
+            .min_latency(200_000_000i64)
+            .format(gst::Format::Time)
+            .max_bytes(1)
+            .block(true)
+            .is_live(true)
+            .build();
 
         let active_sink = GStreamerActiveSink {
             pipeline,
@@ -122,11 +111,9 @@ impl GStreamerActiveSink {
             .link_audio_mixer()
             .context("unable to link AudioMixer to sink")?;
 
-        if video_support {
-            active_sink
-                .link_video_mixer()
-                .context("unable to link VideoMixer to sink")?;
-        }
+        active_sink
+            .link_video_mixer()
+            .context("unable to link VideoMixer to sink")?;
 
         active_sink
             .pipeline
@@ -182,10 +169,8 @@ impl GStreamerActiveSink {
     ///
     /// This can fail if the video sink could not be linked to the `video_mixer`.
     fn link_video_mixer(&self) -> Result<()> {
-        let (Some(video_sink), Some(video_src)) = (&self.inner.video(), &self.video_src) else {
-            return Ok(());
-        };
-        let video_src = video_src.to_owned().upcast::<Element>();
+        let video_sink = self.inner.video();
+        let video_src = self.video_src.clone().upcast::<Element>();
 
         let queue = ElementFactory::make("queue")
             .property_from_str("leaky", "downstream")
@@ -202,7 +187,7 @@ impl GStreamerActiveSink {
 
         videoconvert
             .static_pad_with_context("src")?
-            .link_with_context(video_sink)?;
+            .link_with_context(&video_sink)?;
 
         Ok(())
     }
@@ -242,10 +227,6 @@ impl Sink for GStreamerActiveSink {
     }
 
     fn on_video_frame(&mut self, buffer: Vec<u8>) -> Result<()> {
-        let Some(app_src) = &self.video_src else {
-            return Ok(());
-        };
-
         let mut gstreamer_buffer = Buffer::with_size(buffer.len())?;
         let mut_gstreamer_buffer = gstreamer_buffer.make_mut();
         mut_gstreamer_buffer
@@ -269,7 +250,7 @@ impl Sink for GStreamerActiveSink {
             .build();
 
         log::trace!("Push video sample: {sample:?}");
-        if let Err(err) = app_src.push_sample(&sample) {
+        if let Err(err) = self.video_src.push_sample(&sample) {
             log::error!("Unable to push video sample {sample:?}, received: {err:?}");
         }
 

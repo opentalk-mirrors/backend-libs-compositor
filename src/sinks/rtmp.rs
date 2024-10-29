@@ -129,8 +129,8 @@ impl RTMPSink {
 
 impl GStreamerSink for RTMPSink {
     #[must_use]
-    fn video(&self) -> Option<GhostPad> {
-        Some(self.video_sink_pad.clone())
+    fn video(&self) -> GhostPad {
+        self.video_sink_pad.clone()
     }
 
     #[must_use]

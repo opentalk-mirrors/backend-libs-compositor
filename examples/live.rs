@@ -47,7 +47,6 @@ mod example {
             std::env::var("LIVEKIT_ROOM").expect("Missing LIVEKIT_ROOM environment variable");
 
         let mixer_parameters = MixerParameters {
-            video_support: true,
             auto_subscribe: true,
             clock_format: Default::default(),
             livekit_url,
@@ -59,7 +58,7 @@ mod example {
         let mut mixer = Mixer::new(mixer_parameters).await.unwrap();
 
         mixer
-            .link_gstreamer_sink("system", SystemSink::create(true).unwrap())
+            .link_gstreamer_sink("system", SystemSink::create().unwrap())
             .await
             .unwrap();
 

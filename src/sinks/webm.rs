@@ -140,8 +140,8 @@ impl WebMSink {
 
 impl GStreamerSink for WebMSink {
     #[must_use]
-    fn video(&self) -> Option<GhostPad> {
-        Some(self.video_sink.clone())
+    fn video(&self) -> GhostPad {
+        self.video_sink.clone()
     }
 
     #[must_use]

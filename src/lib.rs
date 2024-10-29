@@ -84,8 +84,6 @@ pub struct Mixer {
     #[cfg(feature = "gstreamer")]
     start: Instant,
 
-    #[cfg(feature = "gstreamer")]
-    video_support: bool,
     auto_subscribe: bool,
 
     sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
@@ -135,8 +133,6 @@ pub(crate) struct Participant {
 }
 
 pub struct MixerParameters {
-    #[cfg(feature = "gstreamer")]
-    pub video_support: bool,
     pub auto_subscribe: bool,
     pub clock_format: ClockFormat,
     pub livekit_url: String,
@@ -197,8 +193,6 @@ impl Mixer {
         let mixer = Self {
             #[cfg(feature = "gstreamer")]
             start,
-            #[cfg(feature = "gstreamer")]
-            video_support: parameters.video_support,
             auto_subscribe: parameters.auto_subscribe,
             sinks,
             room,
@@ -329,8 +323,7 @@ impl Mixer {
             bail!("a stream with the name '{name}' already exists");
         }
 
-        let active_sink =
-            gstreamer::GStreamerActiveSink::new(self.start, self.video_support, name, sink)?;
+        let active_sink = gstreamer::GStreamerActiveSink::new(self.start, name, sink)?;
 
         sinks.insert(name.to_owned(), Box::new(active_sink));
 
