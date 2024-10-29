@@ -9,12 +9,18 @@ use ezk::Frame;
 use ezk_audio::RawAudio;
 use serde::Deserialize;
 
+#[cfg(feature = "gstreamer")]
 mod rtmp;
+#[cfg(feature = "gstreamer")]
 mod system;
+#[cfg(feature = "gstreamer")]
 mod webm;
 
+#[cfg(feature = "gstreamer")]
 pub use rtmp::*;
+#[cfg(feature = "gstreamer")]
 pub use system::*;
+#[cfg(feature = "gstreamer")]
 pub use webm::*;
 
 #[derive(Debug, Clone, Deserialize)]

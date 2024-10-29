@@ -9,8 +9,8 @@ use serde::Deserialize;
 use tokio::sync::broadcast;
 
 use crate::{
-    gstreamer::add_ghost_pad, parse_bin_from_description_with_context, EncoderType, GStreamerSink,
-    GstBinErrorExt,
+    gstreamer::{add_ghost_pad, GStreamerSink},
+    parse_bin_from_description_with_context, EncoderType, GstBinErrorExt,
 };
 
 #[derive(Debug)]

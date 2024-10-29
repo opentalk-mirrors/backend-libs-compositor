@@ -7,7 +7,8 @@ use gst::{Bin, GhostPad};
 use serde::Deserialize;
 
 use crate::{
-    gstreamer::add_ghost_pad, parse_bin_from_description_with_context, EncoderType, GStreamerSink,
+    gstreamer::{add_ghost_pad, GStreamerSink},
+    parse_bin_from_description_with_context, EncoderType,
 };
 
 const DEFAULT_AUDIO_RATE: usize = 48000;
