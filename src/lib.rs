@@ -230,7 +230,7 @@ impl Mixer {
                 }
             },
             RoomEvent::ActiveSpeakersChanged { speakers } => {
-                self.handle_active_speakers_changed(speakers).await?;
+                self.handle_active_speakers_changed(speakers).await;
             }
             RoomEvent::TrackMuted {
                 participant: _,
@@ -268,6 +268,9 @@ impl Mixer {
             RoomEvent::ParticipantDisconnected(participant) => {
                 self.remove_participant(&participant.identity()).await;
             }
+            RoomEvent::Disconnected { reason } => {
+                bail!("Unexpected disconnect from LiveKit, reason: {reason:?}");
+            }
             _ => {}
         }
 
@@ -277,7 +280,7 @@ impl Mixer {
     async fn handle_active_speakers_changed(
         &mut self,
         speakers: Vec<livekit::participant::Participant>,
-    ) -> Result<()> {
+    ) {
         let shared = &mut *self.shared.lock().await;
 
         for state in shared.speakers.values_mut() {
@@ -293,8 +296,6 @@ impl Mixer {
                 },
             );
         }
-
-        Ok(())
     }
 
     // TODO: This will be fixed later on
