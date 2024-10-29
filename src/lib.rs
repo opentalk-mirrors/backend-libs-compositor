@@ -208,6 +208,7 @@ impl Mixer {
         Ok(mixer)
     }
 
+    #[must_use]
     pub fn local_participant(&self) -> LocalParticipant {
         self.room.local_participant()
     }
@@ -453,6 +454,11 @@ impl Drop for Mixer {
     }
 }
 
+/// Create a livekit token
+///
+/// # Errors
+///
+/// If the given strings are empty this function will fail
 pub fn create_token(
     api_key: &str,
     api_secret: &str,

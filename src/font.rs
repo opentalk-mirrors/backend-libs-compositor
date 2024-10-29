@@ -31,6 +31,9 @@ pub struct I420Image<'a> {
 }
 
 impl<'a> I420Image<'a> {
+    /// # Errors
+    ///
+    /// If the img buffer is not a valid I420 image
     pub fn try_from(img: &'a mut [u8], resolution: Point<usize>) -> Result<I420Image<'a>> {
         let (yv, tmp) = img
             .split_at_mut_checked(resolution.x * resolution.y)
@@ -120,6 +123,8 @@ pub struct SimpleText {
 }
 
 impl SimpleText {
+    #[allow(clippy::missing_panics_doc)]
+    #[must_use]
     pub fn new(text_scale: f32, text: &str) -> Self {
         let font_info = create_font().expect("font to be loaded");
 
@@ -150,6 +155,7 @@ impl SimpleText {
         }
     }
 
+    #[must_use]
     pub fn width(&self) -> f32 {
         let min_x = self
             .glyphs
@@ -165,6 +171,7 @@ impl SimpleText {
         max_x - min_x
     }
 
+    #[must_use]
     pub fn height(&self) -> f32 {
         let ascent = self.font_info.as_scaled(self.scale.y).ascent();
         let descent = self.font_info.as_scaled(self.scale.y).descent();
