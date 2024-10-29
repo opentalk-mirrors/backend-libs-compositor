@@ -138,9 +138,7 @@ pub struct MixerParameters {
     pub auto_subscribe: bool,
     pub clock_format: ClockFormat,
     pub livekit_url: String,
-    pub livekit_api_key: String,
-    pub livekit_api_secret: String,
-    pub livekit_room: String,
+    pub livekit_token: String,
 }
 
 impl Mixer {
@@ -154,19 +152,13 @@ impl Mixer {
             elements::register_all().context("Unable to register all custom GStreamer Elements")?;
         }
 
-        let token = create_token(
-            parameters.livekit_api_key.as_str(),
-            parameters.livekit_api_secret.as_str(),
-            parameters.livekit_room.as_str(),
-        )?;
+        let mut room_options = RoomOptions::default();
+        room_options.auto_subscribe = false;
 
         let (room, room_events) = Room::connect(
             &parameters.livekit_url,
-            &token,
-            RoomOptions {
-                auto_subscribe: false,
-                ..Default::default()
-            },
+            &parameters.livekit_token,
+            room_options,
         )
         .await?;
 
@@ -449,10 +441,15 @@ impl Drop for Mixer {
     }
 }
 
-fn create_token(api_key: &str, api_secret: &str, room: &str) -> Result<String, AccessTokenError> {
+pub fn create_token(
+    api_key: &str,
+    api_secret: &str,
+    room: &str,
+    name: &str,
+) -> Result<String, AccessTokenError> {
     AccessToken::with_api_key(api_key, api_secret)
         .with_identity(uuid::Uuid::new_v4().to_string().as_str())
-        .with_name("Recorder")
+        .with_name(name)
         .with_grants(VideoGrants {
             room_join: true,
             room: room.to_string(),

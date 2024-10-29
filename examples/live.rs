@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
 #[cfg(feature = "gstreamer")]
 mod example {
     use opentalk_compositor::{
-        EncoderType, Mixer, MixerParameters, SystemSink, WebMParameters, WebMSink,
+        create_token, EncoderType, Mixer, MixerParameters, SystemSink, WebMParameters, WebMSink,
     };
     use tokio::{
         select,
@@ -50,9 +50,13 @@ mod example {
             auto_subscribe: true,
             clock_format: Default::default(),
             livekit_url,
-            livekit_api_key,
-            livekit_api_secret,
-            livekit_room,
+            livekit_token: create_token(
+                &livekit_api_key,
+                &livekit_api_secret,
+                &livekit_room,
+                "example",
+            )
+            .unwrap(),
         };
 
         let mut mixer = Mixer::new(mixer_parameters).await.unwrap();
