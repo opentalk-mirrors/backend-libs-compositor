@@ -22,7 +22,7 @@ use tokio::{
 
 use crate::Sink;
 
-pub(crate) struct Silence {
+pub struct Silence {
     timestamp: u64,
     interval: Interval,
 }
@@ -151,6 +151,15 @@ impl Source for NativeAudioStreamSource {
 impl NextEventIsCancelSafe for NativeAudioStreamSource {}
 
 pub(crate) async fn audio_mixer_task(
+    audio_mixer: Access<AudioMixer>,
+    sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
+) {
+    if let Err(e) = audio_mixer_task_inner(audio_mixer, sinks).await {
+        log::error!("audio mixer task exited with error={e:?}");
+    }
+}
+
+async fn audio_mixer_task_inner(
     mut audio_mixer: Access<AudioMixer>,
     sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
 ) -> Result<()> {

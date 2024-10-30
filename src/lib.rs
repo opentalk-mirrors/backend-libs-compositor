@@ -43,6 +43,8 @@ pub mod pipeline_watched;
 pub use gst_with_context::*;
 pub use sinks::*;
 
+pub use livekit;
+
 #[macro_use]
 extern crate log;
 
@@ -97,6 +99,7 @@ pub struct Mixer {
 
     // Audio
     audio_mixer_handle: Arc<Mutex<AccessHandle<AudioMixer>>>,
+    audio_mixer_task: JoinHandle<()>,
 
     // Video
     video_stream_tx: mpsc::Sender<VideoStreamCommand>,
@@ -138,14 +141,14 @@ pub struct MixerParameters {
     pub auto_subscribe: bool,
     pub clock_format: ClockFormat,
     pub livekit_url: String,
-    pub livekit_api_key: String,
-    pub livekit_api_secret: String,
-    pub livekit_room: String,
+    pub livekit_token: String,
 }
 
 impl Mixer {
     // TODO: This will be fixed later on
     #[allow(clippy::missing_errors_doc)]
+    // RoomOptions in future livekits will have #[non_exhaustive] making the struct initilization impossible
+    #[allow(clippy::field_reassign_with_default)]
     pub async fn new(parameters: MixerParameters) -> Result<Self> {
         #[cfg(feature = "gstreamer")]
         {
@@ -154,19 +157,13 @@ impl Mixer {
             elements::register_all().context("Unable to register all custom GStreamer Elements")?;
         }
 
-        let token = create_token(
-            parameters.livekit_api_key.as_str(),
-            parameters.livekit_api_secret.as_str(),
-            parameters.livekit_room.as_str(),
-        )?;
+        let mut room_options = RoomOptions::default();
+        room_options.auto_subscribe = false;
 
         let (room, room_events) = Room::connect(
             &parameters.livekit_url,
-            &token,
-            RoomOptions {
-                auto_subscribe: false,
-                ..Default::default()
-            },
+            &parameters.livekit_token,
+            room_options,
         )
         .await?;
 
@@ -186,7 +183,7 @@ impl Mixer {
             Access::new(AudioMixer::new(AudioConvert::new(Silence::default())));
         let audio_mixer_handle = Arc::new(Mutex::new(audio_mixer_handle));
         let sinks = Arc::new(Mutex::new(HashMap::default()));
-        tokio::spawn(audio_mixer_task(access, sinks.clone()));
+        let audio_mixer_task = tokio::spawn(audio_mixer_task(access, sinks.clone()));
 
         // Initialize Video Mixer
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -202,12 +199,18 @@ impl Mixer {
             room_events,
             shared,
             audio_mixer_handle,
+            audio_mixer_task,
             video_stream_tx,
             video_task: Some(video_task),
             shutdown_tx,
         };
 
         Ok(mixer)
+    }
+
+    #[must_use]
+    pub fn local_participant(&self) -> LocalParticipant {
+        self.room.local_participant()
     }
 
     // TODO: This will be fixed later on
@@ -444,15 +447,27 @@ impl Drop for Mixer {
 
                 log::debug!("Drop all active sinks");
                 self.sinks.lock().await.drain();
+
+                self.audio_mixer_task.abort();
             });
         });
     }
 }
 
-fn create_token(api_key: &str, api_secret: &str, room: &str) -> Result<String, AccessTokenError> {
+/// Create a livekit token
+///
+/// # Errors
+///
+/// If the given strings are empty this function will fail
+pub fn create_token(
+    api_key: &str,
+    api_secret: &str,
+    room: &str,
+    name: &str,
+) -> Result<String, AccessTokenError> {
     AccessToken::with_api_key(api_key, api_secret)
         .with_identity(uuid::Uuid::new_v4().to_string().as_str())
-        .with_name("Recorder")
+        .with_name(name)
         .with_grants(VideoGrants {
             room_join: true,
             room: room.to_string(),
