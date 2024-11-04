@@ -435,6 +435,10 @@ impl Drop for Mixer {
 
         tokio::task::block_in_place(move || {
             tokio::runtime::Handle::current().block_on(async move {
+                if let Err(e) = self.room.close().await {
+                    log::warn!("Failed to close livekit room, {:?}", e);
+                }
+
                 log::debug!("Send shutdown to all tasks");
                 self.shutdown_tx.send(()).ok();
 
