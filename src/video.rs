@@ -23,7 +23,8 @@ use tokio::{
 };
 
 use crate::{
-    font::{self, blend_yuv, DrawText, I420Image, Point, SimpleText, TextBox},
+    font::{DrawText, SimpleText, TextBox},
+    image::{blend_yuv, I420Image, Point},
     Participant, Shared, Sink, SpeakingState, BORDER, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING,
     WIDTH,
 };
@@ -227,8 +228,7 @@ impl VideoPipeline {
         let shared = self.shared.blocking_lock();
         let mut base_image = self.base_image.clone();
 
-        let mut base_image_i420 =
-            font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
+        let mut base_image_i420 = I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
         // ==== Render Event Title ====
 
@@ -245,8 +245,7 @@ impl VideoPipeline {
 
         // ==== Render Datetime ====
 
-        let mut base_image_i420 =
-            font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
+        let mut base_image_i420 = I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
         let text = &Local::now().format(&shared.clock_format.0).to_string();
         let date_time_text = SimpleText::new(32.0, text);
@@ -319,7 +318,7 @@ impl VideoPipeline {
 
             {
                 let mut base_image =
-                    font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
+                    I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
                 let col = if active_track.is_speaking {
                     YuvColor::rgb_to_yuv(209, 229, 69)
@@ -363,7 +362,7 @@ impl VideoPipeline {
             // ==== Render Participant Name ====
 
             let mut base_image_i420 =
-                font::I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
+                I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
             let simple_text = SimpleText::new(24.0, &active_track.participant.display_name);
             let text_box = TextBox::new(simple_text);

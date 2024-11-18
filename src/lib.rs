@@ -25,6 +25,7 @@ use video::{VideoPipeline, VideoStreamCommand};
 
 pub mod audio;
 pub mod font;
+pub mod image;
 pub mod sinks;
 pub mod video;
 
