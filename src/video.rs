@@ -4,11 +4,11 @@
 
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Local;
 use ezk_image::{
     resize::{FilterType, ResizeAlg, Resizer},
-    Image, PixelFormat, PixelFormatPlanes, Window,
+    Cropped, Image, PixelFormat, Window,
 };
 use futures::{stream::SelectAll, Stream, StreamExt};
 use image::DynamicImage;
@@ -24,7 +24,7 @@ use tokio::{
 
 use crate::{
     font::{DrawText, SimpleText, TextBox},
-    image::{blend_yuv, I420Image, Point},
+    image::{blend_yuv, I420BufferImageRef, I420Image, Point},
     Participant, Shared, Sink, SpeakingState, BORDER, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING,
     WIDTH,
 };
@@ -44,7 +44,7 @@ pub(crate) enum VideoStreamCommand {
 pub(crate) struct VideoPipeline {
     pub(crate) base_image: Vec<u8>,
     pub(crate) resizer: Resizer,
-    pub(crate) resize_staging_buffer: Vec<u8>,
+    pub(crate) resize_staging_buffer: Image<Vec<u8>>,
 
     pub(crate) sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
     pub(crate) shared: Arc<Mutex<Shared>>,
@@ -90,26 +90,28 @@ impl VideoPipeline {
             background_image.to_rgb8().into_raw()
         };
 
-        let background_image = Image::new(
+        let background_image = Image::from_buffer(
             PixelFormat::RGB,
-            PixelFormatPlanes::RGB(background_image.as_slice()),
+            &background_image[..],
+            None,
             WIDTH,
             HEIGHT,
             I420_COLOR,
-            8,
-        )?;
+        )
+        .context("Failed to create background_image")?;
 
         let mut base_image = vec![0u8; PixelFormat::I420.buffer_size(WIDTH, HEIGHT)];
         ezk_image::convert_multi_thread(
-            background_image,
-            Image::new(
+            &background_image,
+            &mut Image::from_buffer(
                 PixelFormat::I420,
-                PixelFormatPlanes::infer_i420(base_image.as_mut_slice(), WIDTH, HEIGHT),
+                &mut base_image[..],
+                None,
                 WIDTH,
                 HEIGHT,
                 I420_COLOR,
-                8,
-            )?,
+            )
+            .context("Failed to create base image")?,
         )?;
 
         let mut base_image_i420 = I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
@@ -127,7 +129,7 @@ impl VideoPipeline {
             VideoPipeline {
                 base_image,
                 resizer: Resizer::new(ResizeAlg::Interpolation(FilterType::Bilinear)),
-                resize_staging_buffer: vec![0u8; PixelFormat::I420.buffer_size(WIDTH, HEIGHT)],
+                resize_staging_buffer: Image::blank(PixelFormat::I420, WIDTH, HEIGHT, I420_COLOR),
                 sinks,
                 shared,
                 video_streams_rx,
@@ -222,13 +224,10 @@ impl VideoPipeline {
     }
 
     #[allow(clippy::many_single_char_names)]
-    // TODO: Will be fixed later on
-    #[allow(clippy::too_many_lines)]
     fn rerender_frame(&mut self) -> Result<()> {
         let shared = self.shared.blocking_lock();
-        let mut base_image = self.base_image.clone();
-
-        let mut base_image_i420 = I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
+        let mut base_image_buf = self.base_image.clone();
+        let mut base_image = I420Image::try_from(&mut base_image_buf, Point::new(WIDTH, HEIGHT))?;
 
         // ==== Render Event Title ====
 
@@ -239,13 +238,11 @@ impl VideoPipeline {
                     (WIDTH - event_title_text.width() as usize) / 2,
                     OFFSET_TOP - event_title_text.height() as usize / 2,
                 ),
-                &mut base_image_i420,
+                &mut base_image,
             );
         }
 
         // ==== Render Datetime ====
-
-        let mut base_image_i420 = I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
         let text = &Local::now().format(&shared.clock_format.0).to_string();
         let date_time_text = SimpleText::new(32.0, text);
@@ -255,7 +252,7 @@ impl VideoPipeline {
                 WIDTH - date_time_text.width() as usize - PADDING,
                 OFFSET_TOP - date_time_text.height() as usize / 2,
             ),
-            &mut base_image_i420,
+            &mut base_image,
         );
 
         // ==== Render All Participants  ====
@@ -269,16 +266,6 @@ impl VideoPipeline {
         let tracks_len = tracks.len();
         for (pos, active_track) in tracks.into_iter().take(8).enumerate() {
             // Resize image to fit
-            let (y, u, v) = active_track.i420_video.data();
-            let src_image = Image::new(
-                PixelFormat::I420,
-                PixelFormatPlanes::I420 { y, u, v },
-                active_track.i420_video.width() as usize,
-                active_track.i420_video.height() as usize,
-                I420_COLOR,
-                8,
-            )?;
-
             let mut window = calculate_speaker_view(pos, tracks_len.min(8), WIDTH, HEIGHT, PADDING);
 
             let original_aspect_ratio =
@@ -293,20 +280,20 @@ impl VideoPipeline {
             window.width = make_even(w as usize);
             window.height = make_even(h as usize);
 
-            let resize_staging_image = Image::new(
-                PixelFormat::I420,
-                PixelFormatPlanes::infer_i420(
-                    self.resize_staging_buffer.as_mut_slice(),
-                    window.width,
-                    window.height,
-                ),
-                window.width,
-                window.height,
-                I420_COLOR,
-                8,
+            let mut resize_staging = Cropped::new(
+                &mut self.resize_staging_buffer,
+                Window {
+                    x: 0,
+                    y: 0,
+                    width: window.width,
+                    height: window.height,
+                },
             )?;
 
-            self.resizer.resize(src_image, resize_staging_image)?;
+            self.resizer.resize(
+                &I420BufferImageRef(active_track.i420_video),
+                &mut resize_staging,
+            )?;
 
             // ====== Render speaker overlay ======
             let overlay = Window {
@@ -316,53 +303,22 @@ impl VideoPipeline {
                 height: window.height + BORDER,
             };
 
-            {
-                let mut base_image =
-                    I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
+            let col = if active_track.is_speaking {
+                YuvColor::rgb_to_yuv(209, 229, 69)
+            } else {
+                YuvColor::rgb_to_yuv(32, 67, 79)
+            };
 
-                let col = if active_track.is_speaking {
-                    YuvColor::rgb_to_yuv(209, 229, 69)
-                } else {
-                    YuvColor::rgb_to_yuv(32, 67, 79)
-                };
+            horizontal_line(&mut base_image, overlay, &col, BORDER, 0);
+            horizontal_line(&mut base_image, overlay, &col, BORDER, overlay.height);
 
-                horizontal_line(&mut base_image, overlay, &col, BORDER, 0);
-                horizontal_line(&mut base_image, overlay, &col, BORDER, overlay.height);
-
-                vertical_line(&mut base_image, overlay, &col, WIDTH, BORDER, 0);
-                vertical_line(&mut base_image, overlay, &col, WIDTH, BORDER, overlay.width);
-            }
+            vertical_line(&mut base_image, overlay, &col, WIDTH, BORDER, 0);
+            vertical_line(&mut base_image, overlay, &col, WIDTH, BORDER, overlay.width);
 
             // Copy image into buffer
-
-            ezk_image::copy(
-                Image::new(
-                    PixelFormat::I420,
-                    PixelFormatPlanes::infer_i420(
-                        self.resize_staging_buffer.as_slice(),
-                        window.width,
-                        window.height,
-                    ),
-                    window.width,
-                    window.height,
-                    I420_COLOR,
-                    8,
-                )?,
-                Image::new(
-                    PixelFormat::I420,
-                    PixelFormatPlanes::infer_i420(base_image.as_mut_slice(), WIDTH, HEIGHT),
-                    WIDTH,
-                    HEIGHT,
-                    I420_COLOR,
-                    8,
-                )?
-                .with_window(window)?,
-            )?;
+            ezk_image::copy(&resize_staging, &mut Cropped::new(&mut base_image, window)?)?;
 
             // ==== Render Participant Name ====
-
-            let mut base_image_i420 =
-                I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
 
             let simple_text = SimpleText::new(24.0, &active_track.participant.display_name);
             let text_box = TextBox::new(simple_text);
@@ -371,14 +327,14 @@ impl VideoPipeline {
                     window.x + (window.width / 2) - text_box.width() as usize / 2,
                     window.y + window.height - text_box.height() as usize,
                 ),
-                &mut base_image_i420,
+                &mut base_image,
             );
         }
 
         // ==== push image into GStreamer pipeline ====
 
         for sink in self.sinks.blocking_lock().values_mut() {
-            if let Err(err) = sink.on_video_frame(base_image.clone()) {
+            if let Err(err) = sink.on_video_frame(&base_image_buf) {
                 log::error!("Unable to push video: {err:?}");
             }
         }

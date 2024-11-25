@@ -226,11 +226,11 @@ impl Sink for GStreamerActiveSink {
         Ok(())
     }
 
-    fn on_video_frame(&mut self, buffer: Vec<u8>) -> Result<()> {
+    fn on_video_frame(&mut self, buffer: &[u8]) -> Result<()> {
         let mut gstreamer_buffer = Buffer::with_size(buffer.len())?;
         let mut_gstreamer_buffer = gstreamer_buffer.make_mut();
         mut_gstreamer_buffer
-            .copy_from_slice(0, &buffer)
+            .copy_from_slice(0, buffer)
             .ok()
             .context("unable to copy from slice")?;
         mut_gstreamer_buffer.set_pts(gst::ClockTime::from_mseconds(

@@ -25,7 +25,7 @@ audio-nodes = { package = "ezk-audio-nodes", version = "0.1" }
 chrono = "0.4"
 ezk = "0.1"
 ezk-audio = "0.1"
-ezk-image = "0.1"
+ezk-image = "0.2"
 futures = "0.3"
 glib = { version = "0.20", optional = true }
 gst-app = { package = "gstreamer-app", version = "0.23", features = ["v1_22"], optional = true }

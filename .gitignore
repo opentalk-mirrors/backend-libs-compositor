@@ -11,3 +11,4 @@ massif.out.*
 /pipelines
 /target
 /test_output/*
+.env

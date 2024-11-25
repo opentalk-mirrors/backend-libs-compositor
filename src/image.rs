@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use anyhow::{Context, Result};
+use ezk_image::{ImageMut, ImageRef, PixelFormat};
 use image::math::Rect;
+use livekit::webrtc::prelude::{I420Buffer, VideoBuffer as _};
+
+use crate::I420_COLOR;
 
 pub(crate) fn blend_yuv(target: u8, alpha: f32, value: f32) -> u8 {
     ((1.0 - alpha) * f32::from(target) + (value * alpha)) as u8
@@ -96,5 +100,70 @@ impl<'a> I420Image<'a> {
         let start_v_index = (y / 2) * (self.resolution.x / 2) + (x / 2);
         let end_v_index = start_v_index + amount / 2;
         &mut self.v[start_v_index..end_v_index]
+    }
+}
+
+unsafe impl ImageRef for I420Image<'_> {
+    fn format(&self) -> PixelFormat {
+        PixelFormat::I420
+    }
+
+    fn width(&self) -> usize {
+        self.resolution.x
+    }
+
+    fn height(&self) -> usize {
+        self.resolution.y
+    }
+
+    fn planes(&self) -> Box<dyn Iterator<Item = (&[u8], usize)> + '_> {
+        let strides = self.format().packed_strides(self.resolution.x);
+        Box::new([&*self.y, &*self.u, &*self.v].into_iter().zip(strides))
+    }
+
+    fn color(&self) -> ezk_image::ColorInfo {
+        I420_COLOR
+    }
+}
+
+unsafe impl ImageMut for I420Image<'_> {
+    fn planes_mut(&mut self) -> Box<dyn Iterator<Item = (&mut [u8], usize)> + '_> {
+        let strides = self.format().packed_strides(self.resolution.x);
+        Box::new([&mut *self.y, self.u, self.v].into_iter().zip(strides))
+    }
+}
+
+/// Wrapper over livekit's I420Buffer implementing ezk-image's ImageRef
+pub(crate) struct I420BufferImageRef<'a>(pub(crate) &'a I420Buffer);
+
+unsafe impl ImageRef for I420BufferImageRef<'_> {
+    fn format(&self) -> PixelFormat {
+        PixelFormat::I420
+    }
+
+    fn width(&self) -> usize {
+        self.0.width() as usize
+    }
+
+    fn height(&self) -> usize {
+        self.0.height() as usize
+    }
+
+    fn planes(&self) -> Box<dyn Iterator<Item = (&[u8], usize)> + '_> {
+        let (y_stride, u_stride, v_stride) = self.0.strides();
+        let (y, u, v) = self.0.data();
+
+        Box::new(
+            [
+                (y, y_stride as usize),
+                (u, u_stride as usize),
+                (v, v_stride as usize),
+            ]
+            .into_iter(),
+        )
+    }
+
+    fn color(&self) -> ezk_image::ColorInfo {
+        I420_COLOR
     }
 }

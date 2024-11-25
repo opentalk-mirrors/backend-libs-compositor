@@ -34,5 +34,5 @@ pub enum EncoderType {
 pub trait Sink: Send + Debug {
     fn on_audio_frame(&mut self, frame: Frame<RawAudio>) -> Result<()>;
 
-    fn on_video_frame(&mut self, buffer: Vec<u8>) -> Result<()>;
+    fn on_video_frame(&mut self, buffer: &[u8]) -> Result<()>;
 }
