@@ -67,7 +67,6 @@ allow = [
   "ISC",
   "MIT",
   "OpenSSL",
-  "Unicode-DFS-2016",
   "Unicode-3.0",
   "Zlib",
 ]
@@ -161,6 +160,8 @@ skip = [
   { name = "rustls-webpki", version = "=0.101.7" },
   { name = "rustls", version = "=0.21.12" },
   { name = "syn", version = "=2" },
+  { name = "thiserror", version = "1" },
+  { name = "thiserror-impl", version = "1" },
 ]
 # Similarly to `skip` allows you to skip certain crates during duplicate
 # detection. Unlike skip, it also includes the entire tree of transitive

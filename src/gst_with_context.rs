@@ -57,7 +57,7 @@ pub trait GstElementBuilderErrorExt {
     fn build_with_context(self) -> Result<Element>;
 }
 
-impl<'a> GstElementBuilderErrorExt for ElementBuilder<'a> {
+impl GstElementBuilderErrorExt for ElementBuilder<'_> {
     #[track_caller]
     fn build_with_context(self) -> Result<Element> {
         self.build()

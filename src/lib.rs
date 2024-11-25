@@ -6,7 +6,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use audio::{audio_mixer_task, NativeAudioStreamSource, Silence};
 use audio_nodes::{AudioConvert, AudioMixer};
 use ezk::nodes::{Access, AccessHandle};
@@ -189,7 +189,8 @@ impl Mixer {
         // Initialize Video Mixer
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let (video_stream_tx, video_task) =
-            VideoPipeline::create(sinks.clone(), shared.clone(), shutdown_rx)?;
+            VideoPipeline::create(sinks.clone(), shared.clone(), shutdown_rx)
+                .context("Failed to create video pipeline")?;
 
         let mixer = Self {
             #[cfg(feature = "gstreamer")]
