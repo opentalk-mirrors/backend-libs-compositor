@@ -20,6 +20,7 @@ use livekit::{
 use tokio::{
     sync::{broadcast, mpsc, oneshot, Mutex},
     task::JoinHandle,
+    time::interval_at,
 };
 
 use crate::{
@@ -40,6 +41,7 @@ pub(crate) enum VideoStreamCommand {
     RemoveTrack(TrackSid),
     Mute(TrackSid),
     Unmute(TrackSid),
+    SetTargetFps(u16),
 }
 
 pub(crate) struct VideoPipeline {
@@ -54,6 +56,8 @@ pub(crate) struct VideoPipeline {
     pub(crate) video_sources: SelectAll<VideoStream>,
     pub(crate) video_frames: HashMap<TrackSid, I420Buffer>,
     pub(crate) tracks: HashMap<TrackSid, TrackData>,
+
+    pub(crate) target_fps: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +72,7 @@ impl VideoPipeline {
         sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
         shared: Arc<Mutex<Shared>>,
         shutdown_channel: broadcast::Receiver<()>,
+        target_fps: u16,
     ) -> Result<(mpsc::Sender<VideoStreamCommand>, JoinHandle<()>)> {
         let background_image =
             image::load_from_memory(include_bytes!("../assets/background.png")).unwrap();
@@ -137,6 +142,7 @@ impl VideoPipeline {
                 video_frames: HashMap::default(),
                 video_sources: SelectAll::default(),
                 tracks: HashMap::default(),
+                target_fps,
             }
             .run(shutdown_channel),
         );
@@ -145,7 +151,9 @@ impl VideoPipeline {
     }
 
     pub(crate) async fn run(mut self, mut shutdown_channel: broadcast::Receiver<()>) {
-        let mut rerender_interval = tokio::time::interval(Duration::from_secs_f64(1. / 25.));
+        let mut rerender_interval =
+            tokio::time::interval(Duration::from_secs_f64(1. / f64::from(self.target_fps)));
+        let mut last_frame = now;
 
         loop {
             tokio::select! {
@@ -153,10 +161,14 @@ impl VideoPipeline {
                     log::debug!("Shutdown received for VideoPipeline");
                     return;
                 }
-                _ = rerender_interval.tick() => {
+                current_frame = rerender_interval.tick() => {
                     if !self.shared.lock().await.render_frames {
                         continue;
                     }
+
+                    frame_counter += 1;
+                    last_frame = current_frame.into();
+
                     // Move self into a blocking threadpool to avoid locking up the tokio runtime while compositing the video
                     let (tx, rx) = oneshot::channel();
                     tokio::task::spawn_blocking(move || {
@@ -211,6 +223,11 @@ impl VideoPipeline {
                                 track.is_muted = false;
                             }
                         }
+                        VideoStreamCommand::SetTargetFps(target_fps) => {
+                            self.target_fps = target_fps;
+                            let delta = Duration::from_secs_f64(1. / f64::from(self.target_fps));
+                            rerender_interval = interval_at((last_frame + delta).into(), delta);
+                        }
                     }
                 }
                 Some((participant_sid, track_sid, video_frame)) = self.video_sources.next() => {
@@ -224,6 +241,13 @@ impl VideoPipeline {
 
                     self.video_frames.insert(track_sid, video_frame);
                 }
+            }
+
+            let as_secs = now.elapsed().as_secs_f64();
+            if as_secs >= 1.0 {
+                log::trace!("FPS: {}", (frame_counter as f64 / as_secs));
+                now = Instant::now();
+                frame_counter = 0;
             }
         }
     }
