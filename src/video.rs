@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -151,6 +156,8 @@ impl VideoPipeline {
     }
 
     pub(crate) async fn run(mut self, mut shutdown_channel: broadcast::Receiver<()>) {
+        let mut frame_counter = 0u64;
+        let mut now = Instant::now();
         let mut rerender_interval =
             tokio::time::interval(Duration::from_secs_f64(1. / f64::from(self.target_fps)));
         let mut last_frame = now;
@@ -242,7 +249,6 @@ impl VideoPipeline {
                     self.video_frames.insert(track_sid, video_frame);
                 }
             }
-
             let as_secs = now.elapsed().as_secs_f64();
             if as_secs >= 1.0 {
                 log::trace!("FPS: {}", (frame_counter as f64 / as_secs));
