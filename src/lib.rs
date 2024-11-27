@@ -443,7 +443,7 @@ impl Mixer {
         log::debug!("Remove participant {identity:?}");
 
         self.video_stream_tx
-            .send(VideoStreamCommand::Remove(identity.to_owned()))
+            .send(VideoStreamCommand::RemoveParticipant(identity.to_owned()))
             .await
             .expect("unable to send add remove event to video_stream_tx");
     }
