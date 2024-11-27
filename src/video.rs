@@ -37,6 +37,7 @@ pub(crate) type NewVideoStream = (ParticipantIdentity, RemoteVideoTrack, VideoSt
 pub(crate) enum VideoStreamCommand {
     Add(NewVideoStream),
     Remove(ParticipantIdentity),
+    RemoveTrack(TrackSid),
     Mute(TrackSid),
     Unmute(TrackSid),
 }
@@ -194,6 +195,10 @@ impl VideoPipeline {
                                 self.video_frames.remove(&track_sid);
                                 self.tracks.remove(&track_sid);
                             }
+                        }
+                        VideoStreamCommand::RemoveTrack(track_sid) => {
+                            self.video_frames.remove(&track_sid);
+                            self.tracks.remove(&track_sid);
                         }
                         VideoStreamCommand::Mute(track_sid) => {
                             if let Some(track) = self.tracks.get_mut(&track_sid) {
