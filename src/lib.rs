@@ -247,6 +247,16 @@ impl Mixer {
                     self.add_video_track(participant, video_track).await;
                 }
             },
+            RoomEvent::TrackUnsubscribed {
+                track,
+                publication: _,
+                participant: _,
+            } => {
+                self.video_stream_tx
+                    .send(VideoStreamCommand::RemoveTrack(track.sid()))
+                    .await
+                    .expect("unable to send video stream remove track event");
+            }
             RoomEvent::ActiveSpeakersChanged { speakers } => {
                 self.handle_active_speakers_changed(speakers).await;
             }
@@ -276,6 +286,18 @@ impl Mixer {
                 if shared.participants.contains_key(&participant.identity()) {
                     publication.set_subscribed(true);
                 }
+            }
+            RoomEvent::TrackUnpublished {
+                publication,
+                participant: _,
+            } => {
+                let Some(track) = publication.track() else {
+                    return Ok(());
+                };
+                self.video_stream_tx
+                    .send(VideoStreamCommand::RemoveTrack(track.sid()))
+                    .await
+                    .expect("unable to send video stream remove track event");
             }
             RoomEvent::ParticipantConnected(participant) => {
                 if self.auto_subscribe {
@@ -421,7 +443,7 @@ impl Mixer {
         log::debug!("Remove participant {identity:?}");
 
         self.video_stream_tx
-            .send(VideoStreamCommand::Remove(identity.to_owned()))
+            .send(VideoStreamCommand::RemoveParticipant(identity.to_owned()))
             .await
             .expect("unable to send add remove event to video_stream_tx");
     }
