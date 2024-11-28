@@ -101,6 +101,11 @@ lint:yaml:
     - apk add --no-cache yamllint
   script: yamllint .
 
+lint:toml:
+  stage: lint
+  <<: *default_job_condition
+  script: taplo fmt --check
+
 lint:unnecessary_dependencies:
   stage: lint
   <<: *default_job_condition
