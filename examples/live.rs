@@ -11,6 +11,8 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(feature = "gstreamer")]
 mod example {
+    use std::time::Duration;
+
     use opentalk_compositor::{
         create_token, EncoderType, Mixer, MixerParameters, SystemSink, WebMParameters, WebMSink,
     };
@@ -20,6 +22,7 @@ mod example {
             ctrl_c,
             unix::{signal, SignalKind},
         },
+        time::{interval_at, Instant},
     };
 
     #[tokio::main]
@@ -45,6 +48,10 @@ mod example {
             .expect("Missing LIVEKIT_API_SECRET environment variable");
         let livekit_room =
             std::env::var("LIVEKIT_ROOM").expect("Missing LIVEKIT_ROOM environment variable");
+        let target_fps = std::env::var("COMPOSITOR_FPS")
+            .unwrap_or("25".to_string())
+            .parse::<u16>()
+            .unwrap_or(25);
 
         let mixer_parameters = MixerParameters {
             auto_subscribe: true,
@@ -57,6 +64,7 @@ mod example {
                 "example",
             )
             .unwrap(),
+            target_fps,
         };
 
         let mut mixer = Mixer::new(mixer_parameters).await.unwrap();
@@ -79,7 +87,18 @@ mod example {
             }
         });
 
-        tokio::spawn(async move { mixer.run().await });
+        tokio::spawn(async move {
+            let duration = Duration::from_secs(10);
+            let mut interval = interval_at(Instant::now() + duration, duration);
+            loop {
+                select! {
+                    _ = mixer.run() => {}
+                    _ = interval.tick() => {
+                        mixer.set_target_fps(5).await;
+                    }
+                }
+            }
+        });
 
         let mut sig_term = signal(SignalKind::terminate()).expect("can not setup SIGTERM handler");
 

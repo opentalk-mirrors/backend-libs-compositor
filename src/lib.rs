@@ -143,6 +143,7 @@ pub struct MixerParameters {
     pub clock_format: ClockFormat,
     pub livekit_url: String,
     pub livekit_token: String,
+    pub target_fps: u16,
 }
 
 impl Mixer {
@@ -188,9 +189,13 @@ impl Mixer {
 
         // Initialize Video Mixer
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-        let (video_stream_tx, video_task) =
-            VideoPipeline::create(sinks.clone(), shared.clone(), shutdown_rx)
-                .context("Failed to create video pipeline")?;
+        let (video_stream_tx, video_task) = VideoPipeline::create(
+            sinks.clone(),
+            shared.clone(),
+            shutdown_rx,
+            parameters.target_fps,
+        )
+        .context("Failed to create video pipeline")?;
 
         let mixer = Self {
             #[cfg(feature = "gstreamer")]
@@ -230,6 +235,18 @@ impl Mixer {
         }
 
         bail!("Disconnected from livekit")
+    }
+
+    /// Sets the target fps of this [`Mixer`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the message cannot be sent.
+    pub async fn set_target_fps(&self, target_fps: u16) {
+        self.video_stream_tx
+            .send(VideoStreamCommand::SetTargetFps(target_fps))
+            .await
+            .expect("unable to send set target fps event");
     }
 
     async fn handle_livekit_event(&mut self, event: livekit::RoomEvent) -> Result<()> {
