@@ -76,6 +76,7 @@ mod example {
 
         let webmsink = WebMSink::create(&WebMParameters {
             encoder_type: EncoderType::CPU,
+            chunk_size: None,
         })
         .unwrap();
         let mut receiver = webmsink.subscribe();

@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 
-mod matroskas3sink;
+pub(crate) mod matroskas3sink;
 
 /// # Errors
 ///
