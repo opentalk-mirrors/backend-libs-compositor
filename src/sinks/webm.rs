@@ -9,6 +9,7 @@ use serde::Deserialize;
 use tokio::sync::broadcast;
 
 use crate::{
+    elements::matroskas3sink::DEFAULT_CHUNK_SIZE,
     gstreamer::{add_ghost_pad, GStreamerSink},
     parse_bin_from_description_with_context, EncoderType, GstBinErrorExt,
 };
@@ -24,6 +25,7 @@ pub struct WebMSink {
 #[derive(Debug, Clone, Deserialize)]
 pub struct WebMParameters {
     pub encoder_type: EncoderType,
+    pub chunk_size: Option<u64>,
 }
 
 impl WebMSink {
@@ -78,6 +80,7 @@ impl WebMSink {
                     offset-to-zero=true
                 ! opentalk-matroska-s3-sink
                     name=matroska-s3
+                    chunk-size={chunk_size}
                 "#,
                 encoder = match params.encoder_type {
                     EncoderType::CPU =>
@@ -95,6 +98,7 @@ impl WebMSink {
                         ! vaapivp9enc
                     ",
                 },
+                chunk_size = params.chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE)
             ),
             false,
         )?;
@@ -117,6 +121,11 @@ impl WebMSink {
             let Ok(bytes) = values[2].get::<glib::Bytes>() else {
                 return None;
             };
+            log::trace!(
+                "Received part with part number {part} and {} bytes",
+                bytes.len(),
+            );
+
             let mut data = part.to_be_bytes().to_vec();
             data.extend(bytes.to_vec());
             let _ = sender.send(data);

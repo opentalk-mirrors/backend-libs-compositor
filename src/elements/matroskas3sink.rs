@@ -10,6 +10,9 @@ glib::wrapper! {
         @extends gst::Object, gst::Element, gst_base::BaseSink;
 }
 
+// This should be 5 MiB, regarding the S3 specifications
+pub(crate) const DEFAULT_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
+
 /// # Errors
 ///
 /// Returns an error if Gstreamer is not initialized or this function was already called in this proccess.
@@ -44,6 +47,8 @@ mod imp {
     use once_cell::sync::Lazy;
     use parking_lot::Mutex;
 
+    use super::DEFAULT_CHUNK_SIZE;
+
     static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
         gst::DebugCategory::new(
             "opentalk-matroska-s3-sink",
@@ -77,7 +82,7 @@ mod imp {
     impl Default for Inner {
         fn default() -> Self {
             Self {
-                chunk_size: 5_000_000,
+                chunk_size: DEFAULT_CHUNK_SIZE,
                 matroska_header: vec![],
                 current_buffer: Cursor::new(vec![]),
                 total_bytes_produced: 0,
@@ -111,7 +116,7 @@ mod imp {
                 vec![glib::ParamSpecUInt64::builder("chunk-size")
                     .readwrite()
                     .blurb("chunk size in bytes")
-                    .default_value(5_000_000)
+                    .default_value(DEFAULT_CHUNK_SIZE)
                     .build()]
             });
 
