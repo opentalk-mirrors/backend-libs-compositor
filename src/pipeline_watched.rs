@@ -57,7 +57,7 @@ impl PipelineWatched {
                                 &pipeline,
                                 err.src(),
                                 &err.error(),
-                                &err.debug(),
+                                err.debug().as_ref(),
                                 Level::Error,
                             );
                         }
@@ -66,7 +66,7 @@ impl PipelineWatched {
                                 &pipeline,
                                 warn.src(),
                                 &warn.error(),
-                                &warn.debug(),
+                                warn.debug().as_ref(),
                                 Level::Warn,
                             );
                         }
@@ -75,7 +75,7 @@ impl PipelineWatched {
                                 &pipeline,
                                 info.src(),
                                 &info.error(),
-                                &info.debug(),
+                                info.debug().as_ref(),
                                 Level::Info,
                             );
                         }
@@ -181,7 +181,7 @@ fn log_message(
     pipeline: &Pipeline,
     src: Option<&Object>,
     error: &glib::Error,
-    debug: &Option<GString>,
+    debug: Option<&GString>,
     level: Level,
 ) {
     log::log!(
