@@ -126,8 +126,10 @@ impl WebMSink {
                 bytes.len(),
             );
 
-            let mut data = part.to_be_bytes().to_vec();
-            data.extend(bytes.to_vec());
+            let mut data = Vec::with_capacity(size_of_val(&part) + bytes.len());
+            data.extend_from_slice(&part.to_be_bytes());
+            data.extend_from_slice(&bytes);
+
             let _ = sender.send(data);
 
             None
