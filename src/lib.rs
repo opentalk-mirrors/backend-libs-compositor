@@ -95,6 +95,9 @@ pub struct Mixer {
     // LiveKitRoom events
     room_events: mpsc::UnboundedReceiver<RoomEvent>,
 
+    #[allow(clippy::type_complexity)]
+    external_room_event_handler: Vec<Box<dyn FnMut(&RoomEvent) + Send>>,
+
     // Shared Data for Audio and Video Mixer
     shared: Arc<Mutex<Shared>>,
 
@@ -204,6 +207,7 @@ impl Mixer {
             sinks,
             room,
             room_events,
+            external_room_event_handler: vec![],
             shared,
             audio_mixer_handle,
             audio_mixer_task,
@@ -215,13 +219,24 @@ impl Mixer {
         Ok(mixer)
     }
 
+    pub fn add_livekit_event_handler<F>(&mut self, event_handler: F)
+    where
+        F: FnMut(&RoomEvent) + Send + 'static,
+    {
+        self.external_room_event_handler
+            .push(Box::new(event_handler));
+    }
+
     #[must_use]
     pub fn local_participant(&self) -> LocalParticipant {
         self.room.local_participant()
     }
 
-    // TODO: This will be fixed later on
-    #[allow(clippy::missing_errors_doc)]
+    /// Run the compositor event loop
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the livekit connection is lost
     pub async fn run(&mut self) -> Result<()> {
         if self.auto_subscribe {
             for participant in self.room.remote_participants().values() {
@@ -231,6 +246,10 @@ impl Mixer {
         }
 
         while let Some(event) = self.room_events.recv().await {
+            for handler in &mut self.external_room_event_handler {
+                handler(&event);
+            }
+
             self.handle_livekit_event(event).await?;
         }
 
@@ -241,15 +260,15 @@ impl Mixer {
     ///
     /// # Panics
     ///
-    /// Panics if the message cannot be sent.
-    pub async fn set_target_fps(&self, target_fps: u16) {
+    /// Panics if the background render thread has exited
+    pub async fn set_target_fps(&mut self, target_fps: u16) {
         self.video_stream_tx
             .send(VideoStreamCommand::SetTargetFps(target_fps))
             .await
             .expect("unable to send set target fps event");
     }
 
-    async fn handle_livekit_event(&mut self, event: livekit::RoomEvent) -> Result<()> {
+    async fn handle_livekit_event(&mut self, event: RoomEvent) -> Result<()> {
         log::debug!("LiveKit event received: {event:?}");
         match event {
             RoomEvent::TrackSubscribed {
