@@ -85,7 +85,7 @@ impl WebMSink {
                 encoder = match params.encoder_type {
                     EncoderType::CPU =>
                         "
-                        video/x-raw,format=I420,framerate=25/1,pixel-aspect-ratio=1/1,colorimetry=bt709
+                        video/x-raw,format=I420,pixel-aspect-ratio=1/1,colorimetry=bt709
                         ! vp8enc
                           deadline=1 cpu-used=4 threads=4 token-partitions=1
                           end-usage=cbr target-bitrate=2600000 undershoot=90
@@ -94,7 +94,7 @@ impl WebMSink {
                     ",
                     EncoderType::VAAPI =>
                         "
-                        video/x-raw,format=NV12,framerate=30/1,pixel-aspect-ratio=1/1,colorimetry=bt709
+                        video/x-raw,format=NV12,pixel-aspect-ratio=1/1,colorimetry=bt709
                         ! vaapivp9enc
                     ",
                 },
