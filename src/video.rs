@@ -4,10 +4,14 @@
 
 use std::{
     collections::HashMap,
+    future::poll_fn,
     pin::Pin,
     sync::Arc,
+    task::Poll,
     time::{Duration, Instant},
 };
+
+use std::sync::Mutex as StdMutex;
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -25,7 +29,7 @@ use livekit::{
 use tokio::{
     sync::{broadcast, mpsc, oneshot, Mutex},
     task::JoinHandle,
-    time::interval_at,
+    time::{interval_at, MissedTickBehavior},
 };
 
 use crate::{
@@ -35,8 +39,9 @@ use crate::{
     WIDTH,
 };
 
-pub(crate) type VideoStream =
-    Pin<Box<dyn Stream<Item = (ParticipantIdentity, TrackSid, I420Buffer)> + Send>>;
+pub(crate) type FrameInfo = (ParticipantIdentity, TrackSid, I420Buffer);
+
+pub(crate) type VideoStream = Pin<Box<dyn Stream<Item = FrameInfo> + Send>>;
 
 pub(crate) type NewVideoStream = (ParticipantIdentity, RemoteVideoTrack, VideoStream);
 
@@ -55,7 +60,7 @@ pub(crate) struct VideoPipeline {
     pub(crate) resize_staging_buffer: Image<Vec<u8>>,
 
     pub(crate) sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
-    pub(crate) shared: Arc<Mutex<Shared>>,
+    pub(crate) shared: Arc<StdMutex<Shared>>,
 
     pub(crate) video_streams_rx: mpsc::Receiver<VideoStreamCommand>,
     pub(crate) video_sources: SelectAll<VideoStream>,
@@ -75,7 +80,7 @@ pub(crate) struct TrackData {
 impl VideoPipeline {
     pub(crate) fn create(
         sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
-        shared: Arc<Mutex<Shared>>,
+        shared: Arc<StdMutex<Shared>>,
         shutdown_channel: broadcast::Receiver<()>,
         target_fps: u16,
     ) -> Result<(mpsc::Sender<VideoStreamCommand>, JoinHandle<()>)> {
@@ -155,11 +160,32 @@ impl VideoPipeline {
         Ok((video_streams_tx, task))
     }
 
+    fn handle_new_video_frame(&mut self, rdy: FrameInfo) {
+        let (participant_sid, track_sid, video_frame) = rdy;
+
+        let participant_exists = self
+            .shared
+            .lock()
+            .unwrap()
+            .participants
+            .contains_key(&participant_sid);
+        let Some(track_data) = self.tracks.get(&track_sid) else {
+            return;
+        };
+        if !participant_exists || track_data.is_muted {
+            return;
+        }
+
+        self.video_frames.insert(track_sid, video_frame);
+    }
+
     pub(crate) async fn run(mut self, mut shutdown_channel: broadcast::Receiver<()>) {
         let mut frame_counter = 0u64;
         let mut now = Instant::now();
+        let target_frame_interval = 1000 / self.target_fps;
         let mut rerender_interval =
-            tokio::time::interval(Duration::from_secs_f64(1. / f64::from(self.target_fps)));
+            tokio::time::interval(Duration::from_millis(target_frame_interval.into()));
+        rerender_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut last_frame = now;
 
         loop {
@@ -169,9 +195,20 @@ impl VideoPipeline {
                     return;
                 }
                 current_frame = rerender_interval.tick() => {
-                    if !self.shared.lock().await.render_frames {
+                    if !self.shared.lock().unwrap().render_frames {
                         continue;
                     }
+
+                    // drain video sources to ensure we are up to date
+                    // before rerendering
+                    poll_fn(|cx| loop {
+                        match self.video_sources.poll_next_unpin(cx) {
+                            Poll::Ready(Some(rdy)) => self.handle_new_video_frame(rdy),
+                            Poll::Ready(None) | Poll::Pending => return Poll::Ready(()),
+                        }
+                    })
+                    .await;
+
 
                     frame_counter += 1;
                     last_frame = current_frame.into();
@@ -203,7 +240,7 @@ impl VideoPipeline {
                             self.video_sources.push(stream);
                         },
                         VideoStreamCommand::RemoveParticipant(participant_identity) => {
-                            self.shared.lock().await.participants.remove(&participant_identity);
+                            self.shared.lock().unwrap().participants.remove(&participant_identity);
                             let tracks = self
                                 .tracks
                                 .clone()
@@ -234,20 +271,11 @@ impl VideoPipeline {
                             self.target_fps = target_fps;
                             let delta = Duration::from_secs_f64(1. / f64::from(self.target_fps));
                             rerender_interval = interval_at((last_frame + delta).into(), delta);
+                            rerender_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
                         }
                     }
                 }
-                Some((participant_sid, track_sid, video_frame)) = self.video_sources.next() => {
-                    let participant_exists = self.shared.lock().await.participants.contains_key(&participant_sid);
-                    let Some(track_data) = self.tracks.get(&track_sid) else {
-                        continue;
-                    };
-                    if !participant_exists || track_data.is_muted {
-                        continue;
-                    }
-
-                    self.video_frames.insert(track_sid, video_frame);
-                }
+                Some(frame_info) = self.video_sources.next() => self.handle_new_video_frame(frame_info),
             }
             let as_secs = now.elapsed().as_secs_f64();
             if as_secs >= 1.0 {
@@ -260,7 +288,7 @@ impl VideoPipeline {
 
     #[allow(clippy::many_single_char_names)]
     fn rerender_frame(&mut self) -> Result<()> {
-        let shared = self.shared.blocking_lock();
+        let shared = self.shared.lock().unwrap();
         let mut base_image_buf = self.base_image.clone();
         let mut base_image = I420Image::try_from(&mut base_image_buf, Point::new(WIDTH, HEIGHT))?;
 

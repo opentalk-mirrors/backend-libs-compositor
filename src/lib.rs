@@ -4,6 +4,7 @@
 
 #![allow(clippy::module_name_repetitions)]
 
+use std::sync::Mutex as StdMutex;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use anyhow::{bail, Context, Result};
@@ -99,7 +100,7 @@ pub struct Mixer {
     external_room_event_handler: Vec<Box<dyn FnMut(&RoomEvent) + Send>>,
 
     // Shared Data for Audio and Video Mixer
-    shared: Arc<Mutex<Shared>>,
+    shared: Arc<StdMutex<Shared>>,
 
     // Audio
     audio_mixer_handle: Arc<Mutex<AccessHandle<AudioMixer>>>,
@@ -172,7 +173,7 @@ impl Mixer {
         )
         .await?;
 
-        let shared = Arc::new(Mutex::new(Shared {
+        let shared = Arc::new(StdMutex::new(Shared {
             participants: HashMap::default(),
             speakers: HashMap::new(),
             clock_format: parameters.clock_format,
@@ -240,8 +241,7 @@ impl Mixer {
     pub async fn run(&mut self) -> Result<()> {
         if self.auto_subscribe {
             for participant in self.room.remote_participants().values() {
-                self.add_participant(participant.identity(), participant.name())
-                    .await;
+                self.add_participant(&participant.identity(), participant.name());
             }
         }
 
@@ -294,7 +294,7 @@ impl Mixer {
                     .expect("unable to send video stream remove track event");
             }
             RoomEvent::ActiveSpeakersChanged { speakers } => {
-                self.handle_active_speakers_changed(speakers).await;
+                self.handle_active_speakers_changed(speakers);
             }
             RoomEvent::TrackMuted {
                 participant: _,
@@ -318,7 +318,7 @@ impl Mixer {
                 publication,
                 participant,
             } => {
-                let shared = self.shared.lock().await;
+                let shared = self.shared.lock().unwrap();
                 if shared.participants.contains_key(&participant.identity()) {
                     publication.set_subscribed(true);
                 }
@@ -337,8 +337,7 @@ impl Mixer {
             }
             RoomEvent::ParticipantConnected(participant) => {
                 if self.auto_subscribe {
-                    self.add_participant(participant.identity(), participant.name())
-                        .await;
+                    self.add_participant(&participant.identity(), participant.name());
                 }
             }
             RoomEvent::ParticipantDisconnected(participant) => {
@@ -353,11 +352,13 @@ impl Mixer {
         Ok(())
     }
 
-    async fn handle_active_speakers_changed(
-        &mut self,
-        speakers: Vec<livekit::participant::Participant>,
-    ) {
-        let shared = &mut *self.shared.lock().await;
+    /// Changes the active Speaker for this [`Mixer`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Shared`] lock couldn't be acquired.
+    fn handle_active_speakers_changed(&mut self, speakers: Vec<livekit::participant::Participant>) {
+        let shared = &mut *self.shared.lock().unwrap();
 
         for state in shared.speakers.values_mut() {
             state.is_speaking = false;
@@ -416,8 +417,13 @@ impl Mixer {
         self.sinks.lock().await.remove(name);
     }
 
-    pub async fn set_event_title(&mut self, title: String) {
-        self.shared.lock().await.event_title = Some(title);
+    /// Sets the event title of this [`Mixer`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the lock for the [`Shared`] object could not be acquired.
+    pub fn set_event_title(&mut self, title: String) {
+        self.shared.lock().unwrap().event_title = Some(title);
     }
 
     async fn add_audio_track(&mut self, audio_track: RemoteAudioTrack) {
@@ -456,16 +462,21 @@ impl Mixer {
             .expect("unable to send add event to video_stream_tx");
     }
 
-    pub async fn add_participant(&mut self, identity: ParticipantIdentity, display_name: String) {
+    /// Adds a Participant to the [`Shared`] list.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Shared`] object lock couldn't be acquired.
+    pub fn add_participant(&mut self, identity: &ParticipantIdentity, display_name: String) {
         log::debug!("Add participant {identity:?}");
 
         self.shared
             .lock()
-            .await
+            .unwrap()
             .participants
             .insert(identity.clone(), Participant { display_name });
 
-        if let Some(remote_participant) = self.room.remote_participants().get(&identity) {
+        if let Some(remote_participant) = self.room.remote_participants().get(identity) {
             for (_track_sid, track_publication) in remote_participant.track_publications() {
                 track_publication.set_subscribed(true);
             }
@@ -484,8 +495,13 @@ impl Mixer {
             .expect("unable to send add remove event to video_stream_tx");
     }
 
-    pub async fn set_video_support(&mut self, enabled: bool) {
-        self.shared.lock().await.render_frames = enabled;
+    /// Sets the video support of this [`Mixer`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Shared`] lock couldn't be acquired.
+    pub fn set_video_support(&mut self, enabled: bool) {
+        self.shared.lock().unwrap().render_frames = enabled;
     }
 }
 
