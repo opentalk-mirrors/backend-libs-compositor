@@ -319,6 +319,12 @@ impl Mixer {
                 participant,
             } => {
                 let shared = self.shared.lock().unwrap();
+
+                if !shared.render_frames && matches!(publication.kind(), TrackKind::Video) {
+                    // do not subscribe video while not rendering frames
+                    return Ok(());
+                }
+
                 if shared.participants.contains_key(&participant.identity()) {
                     publication.set_subscribed(true);
                 }
@@ -501,7 +507,23 @@ impl Mixer {
     ///
     /// Panics if the [`Shared`] lock couldn't be acquired.
     pub fn set_video_support(&mut self, enabled: bool) {
-        self.shared.lock().unwrap().render_frames = enabled;
+        let mut shared = self.shared.lock().unwrap();
+
+        shared.render_frames = enabled;
+
+        // set subscription state of all participant publications
+        for (pid, remote_participant) in self.room.remote_participants() {
+            if !shared.participants.contains_key(&pid) {
+                // not tracking this participant, skip
+                continue;
+            }
+
+            for publication in remote_participant.track_publications().into_values() {
+                if matches!(publication.kind(), TrackKind::Video) {
+                    publication.set_subscribed(enabled);
+                }
+            }
+        }
     }
 }
 
