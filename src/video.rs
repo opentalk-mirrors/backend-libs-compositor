@@ -526,9 +526,11 @@ fn get_active_tracks_filtered<'a>(
 
     // Sort the tracks based on the speaker list
     tracks.sort_by_key(|(participant_identity, _, _, _)| {
-        speakers
-            .get(participant_identity)
-            .map(|state| state.last_event)
+        std::cmp::Reverse(
+            speakers
+                .get(participant_identity)
+                .map(|state| state.last_event),
+        )
     });
 
     tracks
