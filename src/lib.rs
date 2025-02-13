@@ -103,11 +103,11 @@ pub struct Mixer {
     shared: Arc<StdMutex<Shared>>,
 
     // Audio
-    audio_mixer_handle: Arc<Mutex<AccessHandle<AudioMixer>>>,
+    audio_mixer_handle: Arc<parking_lot::Mutex<AccessHandle<AudioMixer>>>,
     audio_mixer_task: JoinHandle<()>,
 
     // Video
-    video_stream_tx: mpsc::Sender<VideoStreamCommand>,
+    video_stream_tx: mpsc::UnboundedSender<VideoStreamCommand>,
     video_task: Option<JoinHandle<()>>,
 
     shutdown_tx: broadcast::Sender<()>,
@@ -187,7 +187,7 @@ impl Mixer {
         // Initialize Audio Mixer
         let (access, audio_mixer_handle) =
             Access::new(AudioMixer::new(AudioConvert::new(Silence::default())));
-        let audio_mixer_handle = Arc::new(Mutex::new(audio_mixer_handle));
+        let audio_mixer_handle = Arc::new(parking_lot::Mutex::new(audio_mixer_handle));
         let sinks = Arc::new(Mutex::new(HashMap::default()));
         let audio_mixer_task = tokio::spawn(audio_mixer_task(access, sinks.clone()));
 
@@ -235,10 +235,10 @@ impl Mixer {
 
     /// Run the compositor event loop
     ///
-    /// # Errors
+    /// Returns once the client was disconnected from livekit
     ///
-    /// Returns an error if the livekit connection is lost
-    pub async fn run(&mut self) -> Result<()> {
+    /// This function is cancel safe
+    pub async fn run(&mut self) -> DisconnectReason {
         if self.auto_subscribe {
             for participant in self.room.remote_participants().values() {
                 self.add_participant(&participant.identity(), participant.name());
@@ -250,10 +250,12 @@ impl Mixer {
                 handler(&event);
             }
 
-            self.handle_livekit_event(event).await?;
+            if let Some(disconnect_reason) = self.handle_livekit_event(event) {
+                return disconnect_reason;
+            }
         }
 
-        bail!("Disconnected from livekit")
+        DisconnectReason::UnknownReason
     }
 
     /// Sets the target fps of this [`Mixer`].
@@ -261,14 +263,13 @@ impl Mixer {
     /// # Panics
     ///
     /// Panics if the background render thread has exited
-    pub async fn set_target_fps(&mut self, target_fps: u16) {
+    pub fn set_target_fps(&mut self, target_fps: u16) {
         self.video_stream_tx
             .send(VideoStreamCommand::SetTargetFps(target_fps))
-            .await
             .expect("unable to send set target fps event");
     }
 
-    async fn handle_livekit_event(&mut self, event: RoomEvent) -> Result<()> {
+    fn handle_livekit_event(&mut self, event: RoomEvent) -> Option<DisconnectReason> {
         log::debug!("LiveKit event received: {event:?}");
         match event {
             RoomEvent::TrackSubscribed {
@@ -277,10 +278,10 @@ impl Mixer {
                 participant,
             } => match track {
                 RemoteTrack::Audio(audio_track) => {
-                    self.add_audio_track(audio_track).await;
+                    self.add_audio_track(audio_track);
                 }
                 RemoteTrack::Video(video_track) => {
-                    self.add_video_track(participant, video_track).await;
+                    self.add_video_track(participant, video_track);
                 }
             },
             RoomEvent::TrackUnsubscribed {
@@ -290,7 +291,6 @@ impl Mixer {
             } => {
                 self.video_stream_tx
                     .send(VideoStreamCommand::RemoveTrack(track.sid()))
-                    .await
                     .expect("unable to send video stream remove track event");
             }
             RoomEvent::ActiveSpeakersChanged { speakers } => {
@@ -302,7 +302,6 @@ impl Mixer {
             } => {
                 self.video_stream_tx
                     .send(VideoStreamCommand::Mute(publication.sid()))
-                    .await
                     .expect("unable to send video stream mute event");
             }
             RoomEvent::TrackUnmuted {
@@ -311,7 +310,6 @@ impl Mixer {
             } => {
                 self.video_stream_tx
                     .send(VideoStreamCommand::Unmute(publication.sid()))
-                    .await
                     .expect("unable to send video stream unmute event");
             }
             RoomEvent::TrackPublished {
@@ -322,7 +320,7 @@ impl Mixer {
 
                 if !shared.render_frames && matches!(publication.kind(), TrackKind::Video) {
                     // do not subscribe video while not rendering frames
-                    return Ok(());
+                    return None;
                 }
 
                 if shared.participants.contains_key(&participant.identity()) {
@@ -333,12 +331,10 @@ impl Mixer {
                 publication,
                 participant: _,
             } => {
-                let Some(track) = publication.track() else {
-                    return Ok(());
-                };
+                let track = publication.track()?;
+
                 self.video_stream_tx
                     .send(VideoStreamCommand::RemoveTrack(track.sid()))
-                    .await
                     .expect("unable to send video stream remove track event");
             }
             RoomEvent::ParticipantConnected(participant) => {
@@ -347,15 +343,13 @@ impl Mixer {
                 }
             }
             RoomEvent::ParticipantDisconnected(participant) => {
-                self.remove_participant(&participant.identity()).await;
+                self.remove_participant(&participant.identity());
             }
-            RoomEvent::Disconnected { reason } => {
-                bail!("Unexpected disconnect from LiveKit, reason: {reason:?}");
-            }
+            RoomEvent::Disconnected { reason } => return Some(reason.into()),
             _ => {}
         }
 
-        Ok(())
+        None
     }
 
     /// Changes the active Speaker for this [`Mixer`].
@@ -432,24 +426,18 @@ impl Mixer {
         self.shared.lock().unwrap().event_title = Some(title);
     }
 
-    async fn add_audio_track(&mut self, audio_track: RemoteAudioTrack) {
+    fn add_audio_track(&mut self, audio_track: RemoteAudioTrack) {
         self.audio_mixer_handle
             .lock()
-            .await
-            .access(move |audio_mixer| {
+            .access_no_wait(move |audio_mixer| {
                 audio_mixer.add_source(AudioConvert::new(NativeAudioStreamSource {
                     stream: NativeAudioStream::new(audio_track.rtc_track(), 48_000, 2),
                     timestamp: 0,
                 }));
-            })
-            .await;
+            });
     }
 
-    async fn add_video_track(
-        &mut self,
-        participant: RemoteParticipant,
-        video_track: RemoteVideoTrack,
-    ) {
+    fn add_video_track(&mut self, participant: RemoteParticipant, video_track: RemoteVideoTrack) {
         self.video_stream_tx
             .send(VideoStreamCommand::Add((
                 participant.identity(),
@@ -464,7 +452,6 @@ impl Mixer {
                     }),
                 ),
             )))
-            .await
             .expect("unable to send add event to video_stream_tx");
     }
 
@@ -492,12 +479,11 @@ impl Mixer {
     /// # Panics
     ///
     /// This can fail if the event could not be send to internal the channel.
-    pub async fn remove_participant(&mut self, identity: &ParticipantIdentity) {
+    pub fn remove_participant(&mut self, identity: &ParticipantIdentity) {
         log::debug!("Remove participant {identity:?}");
 
         self.video_stream_tx
             .send(VideoStreamCommand::RemoveParticipant(identity.to_owned()))
-            .await
             .expect("unable to send add remove event to video_stream_tx");
     }
 

@@ -95,7 +95,7 @@ mod example {
                 select! {
                     _ = mixer.run() => {}
                     _ = interval.tick() => {
-                        mixer.set_target_fps(5).await;
+                        mixer.set_target_fps(5);
                     }
                 }
             }
