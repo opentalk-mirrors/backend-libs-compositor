@@ -62,7 +62,7 @@ pub(crate) struct VideoPipeline {
     pub(crate) sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
     pub(crate) shared: Arc<StdMutex<Shared>>,
 
-    pub(crate) video_streams_rx: mpsc::Receiver<VideoStreamCommand>,
+    pub(crate) video_streams_rx: mpsc::UnboundedReceiver<VideoStreamCommand>,
     pub(crate) video_sources: SelectAll<VideoStream>,
     pub(crate) video_frames: HashMap<TrackSid, I420Buffer>,
     pub(crate) tracks: HashMap<TrackSid, TrackData>,
@@ -83,7 +83,7 @@ impl VideoPipeline {
         shared: Arc<StdMutex<Shared>>,
         shutdown_channel: broadcast::Receiver<()>,
         target_fps: u16,
-    ) -> Result<(mpsc::Sender<VideoStreamCommand>, JoinHandle<()>)> {
+    ) -> Result<(mpsc::UnboundedSender<VideoStreamCommand>, JoinHandle<()>)> {
         let background_image =
             image::load_from_memory(include_bytes!("../assets/background.png")).unwrap();
         let logo_image =
@@ -140,7 +140,7 @@ impl VideoPipeline {
             &mut base_image_i420,
         );
 
-        let (video_streams_tx, video_streams_rx) = mpsc::channel(128);
+        let (video_streams_tx, video_streams_rx) = mpsc::unbounded_channel();
         let task = tokio::spawn(
             VideoPipeline {
                 base_image,
