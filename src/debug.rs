@@ -90,8 +90,7 @@ pub fn dot_ext(
     // create output directory if not exist
     if let Err(e) = std::fs::create_dir_all(&path) {
         error!(
-            "Generation of dot file failed: can not create dir from GST_DEBUG_DUMP_DOT_DIR: {:?}",
-            e
+            "Generation of dot file failed: can not create dir from GST_DEBUG_DUMP_DOT_DIR: {e:?}"
         );
         return;
     };

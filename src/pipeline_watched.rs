@@ -163,7 +163,7 @@ impl Drop for PipelineWatched {
                     log::error!("Unable to set the pipeline to the `Null` state, error: {error}");
                 }
 
-                log::debug!("drop for pipeline {} is done", pipeline_name);
+                log::debug!("drop for pipeline {pipeline_name} is done");
             });
         });
     }
@@ -191,7 +191,7 @@ fn log_message(
     );
 
     if let Some(info) = debug {
-        log::debug!("Debugging information: {}", info);
+        log::debug!("Debugging information: {info}");
     }
 
     if max_level() >= level {
