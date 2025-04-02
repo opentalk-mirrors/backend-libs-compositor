@@ -27,9 +27,9 @@ impl SystemSink {
     /// created for `GStreamer` or if the `GhostPad` cannot be created for the
     /// `video_sink` or `audio_sink`
     pub fn create() -> Result<Self> {
-        let description = r#" 
+        let description = r#"
             name="Sytem-Sinks"
-                
+
             autoaudiosink
                 name=audio
                 sync=false

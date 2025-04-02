@@ -55,7 +55,7 @@ impl WebMSink {
             &format!(
                 r#"
                 name="WebM-Sink"
-                   
+
                 videoconvert
                     name=video
                 ! videorate
