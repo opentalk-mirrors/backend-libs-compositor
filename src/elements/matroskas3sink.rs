@@ -30,6 +30,7 @@ mod imp {
     use std::{
         io::{self, Cursor, Write},
         mem::take,
+        sync::LazyLock,
     };
 
     use anyhow::{Context, Result};
@@ -44,12 +45,11 @@ mod imp {
         EventView, Format, GenericFormattedValue, QueryViewMut, StreamError,
     };
     use gst_base::subclass::prelude::{BaseSinkImpl, BaseSinkImplExt};
-    use once_cell::sync::Lazy;
     use parking_lot::Mutex;
 
     use super::DEFAULT_CHUNK_SIZE;
 
-    static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
+    static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
         gst::DebugCategory::new(
             "opentalk-matroska-s3-sink",
             gst::DebugColorFlags::empty(),
@@ -102,7 +102,7 @@ mod imp {
 
     impl ObjectImpl for MatroskaS3Sink {
         fn signals() -> &'static [glib::subclass::Signal] {
-            static SIGNALS: Lazy<Vec<Signal>> = Lazy::new(|| {
+            static SIGNALS: LazyLock<Vec<Signal>> = LazyLock::new(|| {
                 vec![Signal::builder("part")
                     .param_types([u64::static_type(), glib::Bytes::static_type()])
                     .build()]
@@ -112,7 +112,7 @@ mod imp {
         }
 
         fn properties() -> &'static [glib::ParamSpec] {
-            static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
+            static PROPERTIES: LazyLock<Vec<glib::ParamSpec>> = LazyLock::new(|| {
                 vec![glib::ParamSpecUInt64::builder("chunk-size")
                     .readwrite()
                     .blurb("chunk size in bytes")
@@ -144,20 +144,22 @@ mod imp {
 
     impl ElementImpl for MatroskaS3Sink {
         fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
-            static ELEMENT_METADATA: Lazy<gst::subclass::ElementMetadata> = Lazy::new(|| {
-                gst::subclass::ElementMetadata::new(
+            static ELEMENT_METADATA: LazyLock<gst::subclass::ElementMetadata> = LazyLock::new(
+                || {
+                    gst::subclass::ElementMetadata::new(
                     "OpenTalkMatroskaS3Sink", 
                     "Sink/Network",
                     "Split a matroska stream into chunks that can be uploaded using the S3 multipart API",
                     "Konstantin Baltruschat"
                 )
-            });
+                },
+            );
 
             Some(&*ELEMENT_METADATA)
         }
 
         fn pad_templates() -> &'static [gst::PadTemplate] {
-            static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
+            static PAD_TEMPLATES: LazyLock<Vec<gst::PadTemplate>> = LazyLock::new(|| {
                 let sink_pad_template = gst::PadTemplate::new(
                     "sink",
                     gst::PadDirection::Sink,
