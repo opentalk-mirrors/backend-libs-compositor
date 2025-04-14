@@ -93,7 +93,7 @@ pub fn dot_ext(
             "Generation of dot file failed: can not create dir from GST_DEBUG_DUMP_DOT_DIR: {e:?}"
         );
         return;
-    };
+    }
 
     let Ok(object) = element.clone().dynamic_cast::<gst::Object>() else {
         error!(
