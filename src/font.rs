@@ -2,21 +2,19 @@
 //
 // SPDX-License-Identifier: EUPL-1.2
 
+use crate::image::{blend_yuv, I420Image, Point};
+use ab_glyph::{point, Font, FontRef, Glyph, PxScale, ScaleFont};
 use std::sync::OnceLock;
 
-use ab_glyph::{point, Font, FontArc, Glyph, PxScale, ScaleFont};
-use anyhow::{Context, Result};
+pub(crate) fn create_font() -> &'static FontRef<'static> {
+    static FONT: OnceLock<FontRef<'static>> = OnceLock::new();
 
-use crate::image::{blend_yuv, I420Image, Point};
-
-pub(crate) fn create_font() -> Result<FontArc> {
-    static FONT: OnceLock<FontArc> = OnceLock::new();
-    let _ = FONT;
-
-    FontArc::try_from_slice(include_bytes!(
-        "../assets/opentalk-font/regular/opentalk-regular.ttf"
-    ))
-    .context("font could not be loaded")
+    FONT.get_or_init(|| {
+        FontRef::try_from_slice(include_bytes!(
+            "../assets/opentalk-font/regular/opentalk-regular.ttf"
+        ))
+        .expect("font could not be loaded")
+    })
 }
 
 pub trait DrawText {
@@ -24,7 +22,7 @@ pub trait DrawText {
 }
 
 pub struct SimpleText {
-    font_info: FontArc,
+    font_info: &'static FontRef<'static>,
     glyphs: Vec<Glyph>,
     scale: PxScale,
 }
@@ -33,7 +31,7 @@ impl SimpleText {
     #[allow(clippy::missing_panics_doc)]
     #[must_use]
     pub fn new(text_scale: f32, text: &str) -> Self {
-        let font_info = create_font().expect("font to be loaded");
+        let font_info = create_font();
 
         let scaled = font_info.as_scaled(text_scale);
 
