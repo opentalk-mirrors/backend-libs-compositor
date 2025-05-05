@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use std::{
+    cmp::Reverse,
     collections::HashMap,
     future::poll_fn,
     pin::Pin,
@@ -17,7 +18,7 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use ezk_image::{
     resize::{FilterType, ResizeAlg, Resizer},
-    Cropped, Image, PixelFormat, Window,
+    Cropped, Image, ImageRef, PixelFormat, Window,
 };
 use futures::{stream::SelectAll, Stream, StreamExt};
 use image::DynamicImage;
@@ -59,6 +60,9 @@ pub(crate) struct VideoPipeline {
     pub(crate) resizer: Resizer,
     pub(crate) resize_staging_buffer: Image<Vec<u8>>,
 
+    // Participant placerholder image when there's no video frames to display
+    placeholder_image: I420Buffer,
+
     pub(crate) sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
     pub(crate) shared: Arc<StdMutex<Shared>>,
 
@@ -89,8 +93,7 @@ impl VideoPipeline {
         let logo_image =
             image::load_from_memory(include_bytes!("../assets/logo_gradient.png")).unwrap();
 
-        let (logo_width, logo_height) = (logo_image.width() as usize, logo_image.height() as usize);
-
+        // Convert the background image
         let background_image = if background_image.width() != WIDTH as u32
             || background_image.height() != HEIGHT as u32
         {
@@ -130,10 +133,11 @@ impl VideoPipeline {
             .context("Failed to create base image")?,
         )?;
 
+        // Render the logo once into the base image
         let mut base_image_i420 = I420Image::try_from(&mut base_image, Point::new(WIDTH, HEIGHT))?;
         render_image(
-            logo_height,
-            logo_width,
+            logo_image.width() as usize,
+            logo_image.height() as usize,
             PADDING,
             PADDING,
             &logo_image,
@@ -146,11 +150,12 @@ impl VideoPipeline {
                 base_image,
                 resizer: Resizer::new(ResizeAlg::Interpolation(FilterType::Bilinear)),
                 resize_staging_buffer: Image::blank(PixelFormat::I420, WIDTH, HEIGHT, I420_COLOR),
+                placeholder_image: load_placeholder_image()?,
                 sinks,
                 shared,
                 video_streams_rx,
-                video_frames: HashMap::default(),
                 video_sources: SelectAll::default(),
+                video_frames: HashMap::default(),
                 tracks: HashMap::default(),
                 target_fps,
             }
@@ -319,7 +324,7 @@ impl VideoPipeline {
         );
 
         // ==== Render All Participants  ====
-        let tracks = get_active_tracks(
+        let tracks = get_sorted_tracks(
             &self.tracks,
             &self.video_frames,
             &shared.participants,
@@ -328,11 +333,16 @@ impl VideoPipeline {
 
         let tracks_len = tracks.len();
         for (pos, active_track) in tracks.into_iter().take(8).enumerate() {
+            let i420_video = if let Some(i420_video) = active_track.i420_video {
+                i420_video
+            } else {
+                &self.placeholder_image
+            };
+
             // Resize image to fit
             let mut window = calculate_speaker_view(pos, tracks_len.min(8), WIDTH, HEIGHT, PADDING);
 
-            let original_aspect_ratio =
-                active_track.i420_video.width() as f32 / active_track.i420_video.height() as f32;
+            let original_aspect_ratio = i420_video.width() as f32 / i420_video.height() as f32;
 
             let w = (window.width as f32).min(window.height as f32 / (1. / original_aspect_ratio));
             let h = (window.height as f32).min(window.width as f32 / original_aspect_ratio);
@@ -353,10 +363,8 @@ impl VideoPipeline {
                 },
             )?;
 
-            self.resizer.resize(
-                &I420BufferImageRef(active_track.i420_video),
-                &mut resize_staging,
-            )?;
+            self.resizer
+                .resize(&I420BufferImageRef(i420_video), &mut resize_staging)?;
 
             // ====== Render speaker overlay ======
             let overlay = Window {
@@ -404,6 +412,45 @@ impl VideoPipeline {
 
         Ok(())
     }
+}
+
+fn load_placeholder_image() -> Result<I420Buffer> {
+    let placeholder_image =
+        image::load_from_memory(include_bytes!("../assets/placeholder.png")).unwrap();
+
+    let rgb_placeholder_image = Image::from_buffer(
+        PixelFormat::RGB,
+        placeholder_image.to_rgb8().into_raw(),
+        None,
+        placeholder_image.width() as usize,
+        placeholder_image.height() as usize,
+        I420_COLOR,
+    )
+    .context("Failed to create Image from placeholder.png asset")?;
+
+    let mut i420_placeholder_image_buf = I420Buffer::new(
+        rgb_placeholder_image.width() as u32,
+        rgb_placeholder_image.height() as u32,
+    );
+    let (y_stride, u_stride, v_stride) = i420_placeholder_image_buf.strides();
+    let (y, u, v) = i420_placeholder_image_buf.data_mut();
+    let mut i420_placeholder_image = Image::from_planes(
+        PixelFormat::I420,
+        vec![y, u, v],
+        Some(vec![
+            y_stride as usize,
+            u_stride as usize,
+            v_stride as usize,
+        ]),
+        rgb_placeholder_image.width() as usize,
+        rgb_placeholder_image.height() as usize,
+        I420_COLOR,
+    )
+    .context("Failed to create Image from livekit's I420Buffer")?;
+
+    ezk_image::convert_multi_thread(&rgb_placeholder_image, &mut i420_placeholder_image)?;
+
+    Ok(i420_placeholder_image_buf)
 }
 
 fn vertical_line(
@@ -465,78 +512,67 @@ fn horizontal_line(
 
 struct ActiveTracks<'a> {
     participant: &'a Participant,
-    i420_video: &'a I420Buffer,
+    i420_video: Option<&'a I420Buffer>,
     is_speaking: bool,
 }
 
-fn get_active_tracks<'a>(
+fn get_sorted_tracks<'a>(
     tracks: &'a HashMap<TrackSid, TrackData>,
     video_frames: &'a HashMap<TrackSid, I420Buffer>,
     participants: &'a HashMap<ParticipantIdentity, Participant>,
     speakers: &HashMap<ParticipantIdentity, SpeakingState>,
 ) -> Vec<ActiveTracks<'a>> {
-    let screen_share_tracks = get_active_tracks_filtered(
-        tracks,
-        video_frames,
-        participants,
-        speakers,
-        TrackSource::Screenshare,
-    );
-    let camera_tracks = get_active_tracks_filtered(
-        tracks,
-        video_frames,
-        participants,
-        speakers,
-        TrackSource::Camera,
-    );
-
-    screen_share_tracks
-        .into_iter()
-        .rev()
-        .chain(camera_tracks)
-        .map(|(participant, i420_video, is_speaking)| ActiveTracks {
-            participant,
-            i420_video,
-            is_speaking,
-        })
-        .collect::<_>()
-}
-
-fn get_active_tracks_filtered<'a>(
-    tracks: &'a HashMap<TrackSid, TrackData>,
-    video_frames: &'a HashMap<TrackSid, I420Buffer>,
-    participants: &'a HashMap<ParticipantIdentity, Participant>,
-    speakers: &HashMap<ParticipantIdentity, SpeakingState>,
-    source: TrackSource,
-) -> Vec<(&'a Participant, &'a I420Buffer, bool)> {
-    let mut tracks = tracks
+    let mut participant_sort_items = participants
         .iter()
-        .filter(|(_, track_data)| track_data.source == source)
-        .filter_map(|(track_sid, track_data)| {
-            Some((
-                &track_data.participant_identity,
-                participants.get(&track_data.participant_identity)?,
-                video_frames.get(track_sid)?,
-                speakers
-                    .get(&track_data.participant_identity)
-                    .is_some_and(|state| state.is_speaking),
-            ))
+        .map(|(identity, participant)| {
+            let has_screenshare = tracks.values().any(|t| {
+                t.participant_identity == *identity && t.source == TrackSource::Screenshare
+            });
+
+            let speaking_state = speakers.get(identity);
+
+            (identity, participant, has_screenshare, speaking_state)
         })
         .collect::<Vec<_>>();
 
-    // Sort the tracks based on the speaker list
-    tracks.sort_by_key(|(participant_identity, _, _, _)| {
-        std::cmp::Reverse(
-            speakers
-                .get(participant_identity)
-                .map(|state| state.last_event),
-        )
+    participant_sort_items.sort_by_key(|(_, _, has_screenshare, speaking_state)| {
+        Reverse((
+            *has_screenshare,
+            speaking_state.map(|state| state.is_speaking),
+            speaking_state.map(|state| state.last_event),
+        ))
     });
 
-    tracks
+    participant_sort_items
         .into_iter()
-        .map(|(_, participant, video_frame, is_speaking)| (participant, video_frame, is_speaking))
-        .collect::<Vec<_>>()
+        .flat_map(
+            |(identity, participant, _has_screenshare, speaking_state)| {
+                let mut tracks = tracks
+                    .iter()
+                    .filter(|(_track_id, track_data)| track_data.participant_identity == *identity)
+                    .collect::<Vec<_>>();
+
+                if tracks.is_empty() {
+                    vec![ActiveTracks {
+                        participant,
+                        i420_video: None,
+                        is_speaking: speaking_state.is_some_and(|state| state.is_speaking),
+                    }]
+                } else {
+                    tracks.sort_by_key(|(_, track_data)| Reverse(track_data.source as u32));
+
+                    tracks
+                        .into_iter()
+                        .map(|(track_id, _track_data)| ActiveTracks {
+                            participant,
+                            i420_video: video_frames.get(track_id),
+                            is_speaking: speaking_state.is_some_and(|state| state.is_speaking),
+                        })
+                        .collect::<Vec<_>>()
+                }
+            },
+        )
+        .collect()
 }
 
 #[derive(Debug)]
@@ -560,8 +596,8 @@ impl YuvColor {
 
 #[allow(clippy::many_single_char_names)]
 fn render_image(
-    height: usize,
     width: usize,
+    height: usize,
     offset_x: usize,
     offset_y: usize,
     logo_image: &DynamicImage,
