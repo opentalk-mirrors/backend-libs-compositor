@@ -27,7 +27,6 @@ use livekit::{
     track::{RemoteAudioTrack, RemoteVideoTrack, TrackSource},
     webrtc::video_frame::{I420Buffer, VideoBuffer},
 };
-use resvg::tiny_skia::Color;
 use tokio::{
     sync::{broadcast, mpsc, oneshot, Mutex},
     task::JoinHandle,
@@ -40,6 +39,9 @@ use crate::{
     Participant, Shared, Sink, SpeakingState, BORDER, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING,
     WIDTH,
 };
+
+pub(crate) mod placeholder;
+pub(crate) mod svg;
 
 pub(crate) type FrameInfo = (ParticipantIdentity, TrackSid, I420Buffer);
 
@@ -94,9 +96,9 @@ impl VideoPipeline {
         target_fps: u16,
     ) -> Result<(mpsc::UnboundedSender<VideoStreamCommand>, JoinHandle<()>)> {
         let background_image =
-            image::load_from_memory(include_bytes!("../assets/background.png")).unwrap();
+            image::load_from_memory(include_bytes!("../../assets/background.png")).unwrap();
         let logo_image =
-            image::load_from_memory(include_bytes!("../assets/logo_gradient.png")).unwrap();
+            image::load_from_memory(include_bytes!("../../assets/logo_gradient.png")).unwrap();
 
         // Convert the background image
         let background_image = if background_image.width() != WIDTH as u32
@@ -155,9 +157,9 @@ impl VideoPipeline {
                 base_image,
                 resizer: Resizer::new(ResizeAlg::Interpolation(FilterType::Bilinear)),
                 resize_staging_buffer: Image::blank(PixelFormat::I420, WIDTH, HEIGHT, I420_COLOR),
-                placeholder_image: load_placeholder_image()?,
-                mic_off_image: load_svg(include_bytes!("../assets/mic-off.svg"))?,
-                cam_off_image: load_svg(include_bytes!("../assets/camera-off.svg"))?,
+                placeholder_image: placeholder::load_placeholder_image()?,
+                mic_off_image: svg::load(include_bytes!("../../assets/mic-off.svg"))?,
+                cam_off_image: svg::load(include_bytes!("../../assets/camera-off.svg"))?,
                 sinks,
                 shared,
                 commands_rx: video_streams_rx,
@@ -365,6 +367,8 @@ impl VideoPipeline {
         for (pos, participant_to_show) in participants_to_show.into_iter().take(8).enumerate() {
             let i420_video = if let Some((i420_video, _)) = participant_to_show.i420_video {
                 i420_video
+            } else if let Some(avatar) = &participant_to_show.participant.avatar {
+                avatar
             } else {
                 &self.placeholder_image
             };
@@ -525,83 +529,6 @@ impl VideoPipeline {
 
         Ok(())
     }
-}
-
-fn load_svg(source: &'static [u8]) -> Result<Image<Vec<u8>>> {
-    use resvg::tiny_skia::Pixmap;
-    use resvg::usvg::{Options, Transform, Tree};
-
-    // SCALE = Quality (1x scale is 24x24 px icon) (currently hardcoded for mic-off/cam-off icons)
-    const SCALE: f32 = 1.5;
-    const SIZE: u32 = (24.0 * SCALE) as u32;
-
-    let options = Options::default();
-
-    let tree = Tree::from_data(source, &options).context("Failed to load SVG from source")?;
-
-    let mut pixmap = Pixmap::new(SIZE, SIZE).context("Failed to create pixmap")?;
-    pixmap.fill(Color::from_rgba8(0x13, 0x26, 0x2d, 0xFF));
-    resvg::render(
-        &tree,
-        Transform::from_scale(SCALE, SCALE),
-        &mut pixmap.as_mut(),
-    );
-
-    let pixmap = Image::from_buffer(
-        PixelFormat::RGBA,
-        pixmap.data(),
-        None,
-        SIZE as usize,
-        SIZE as usize,
-        I420_COLOR,
-    )
-    .context("Failed to create Image from pixmap")?;
-
-    let mut i420_icon = Image::blank(PixelFormat::I420, SIZE as usize, SIZE as usize, I420_COLOR);
-
-    ezk_image::convert(&pixmap, &mut i420_icon)
-        .context("Failed to convert SVG icon from RGBA to I420")?;
-
-    Ok(i420_icon)
-}
-
-fn load_placeholder_image() -> Result<I420Buffer> {
-    let placeholder_image =
-        image::load_from_memory(include_bytes!("../assets/placeholder.png")).unwrap();
-
-    let rgb_placeholder_image = Image::from_buffer(
-        PixelFormat::RGB,
-        placeholder_image.to_rgb8().into_raw(),
-        None,
-        placeholder_image.width() as usize,
-        placeholder_image.height() as usize,
-        I420_COLOR,
-    )
-    .context("Failed to create Image from placeholder.png asset")?;
-
-    let mut i420_placeholder_image_buf = I420Buffer::new(
-        rgb_placeholder_image.width() as u32,
-        rgb_placeholder_image.height() as u32,
-    );
-    let (y_stride, u_stride, v_stride) = i420_placeholder_image_buf.strides();
-    let (y, u, v) = i420_placeholder_image_buf.data_mut();
-    let mut i420_placeholder_image = Image::from_planes(
-        PixelFormat::I420,
-        vec![y, u, v],
-        Some(vec![
-            y_stride as usize,
-            u_stride as usize,
-            v_stride as usize,
-        ]),
-        rgb_placeholder_image.width() as usize,
-        rgb_placeholder_image.height() as usize,
-        I420_COLOR,
-    )
-    .context("Failed to create Image from livekit's I420Buffer")?;
-
-    ezk_image::convert_multi_thread(&rgb_placeholder_image, &mut i420_placeholder_image)?;
-
-    Ok(i420_placeholder_image_buf)
 }
 
 fn vertical_line(

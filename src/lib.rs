@@ -13,6 +13,7 @@ use audio_nodes::{AudioConvert, AudioMixer};
 use ezk::nodes::{Access, AccessHandle};
 use ezk_image::{ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, YuvColorInfo};
 use futures::StreamExt;
+use livekit::webrtc::prelude::I420Buffer;
 use livekit::{
     prelude::*,
     webrtc::{audio_stream::native::NativeAudioStream, video_stream::native::NativeVideoStream},
@@ -96,6 +97,8 @@ pub struct Mixer {
     // LiveKitRoom events
     room_events: mpsc::UnboundedReceiver<RoomEvent>,
 
+    http_client: reqwest::Client,
+
     #[allow(clippy::type_complexity)]
     external_room_event_handler: Vec<Box<dyn FnMut(&RoomEvent) + Send>>,
 
@@ -119,7 +122,7 @@ struct SpeakingState {
     last_event: Instant,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Shared {
     participants: HashMap<ParticipantIdentity, Participant>,
     speakers: HashMap<ParticipantIdentity, SpeakingState>,
@@ -137,9 +140,11 @@ impl std::fmt::Debug for Mixer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Participant {
     display_name: String,
+    // Optional avatar to show instead of the placeholder image
+    avatar: Option<I420Buffer>,
 }
 
 pub struct MixerParameters {
@@ -201,13 +206,14 @@ impl Mixer {
         )
         .context("Failed to create video pipeline")?;
 
-        let mixer = Self {
+        let mixer = Mixer {
             #[cfg(feature = "gstreamer")]
             start,
             auto_subscribe: parameters.auto_subscribe,
             sinks,
             room,
             room_events,
+            http_client: reqwest::Client::new(),
             external_room_event_handler: vec![],
             shared,
             audio_mixer_handle,
@@ -479,13 +485,88 @@ impl Mixer {
             .lock()
             .unwrap()
             .participants
-            .insert(identity.clone(), Participant { display_name });
+            .entry(identity.clone())
+            .and_modify(|p| p.display_name.clone_from(&display_name))
+            .or_insert_with(|| Participant {
+                display_name,
+                avatar: None,
+            });
 
         if let Some(remote_participant) = self.room.remote_participants().get(identity) {
             for (_track_sid, track_publication) in remote_participant.track_publications() {
                 track_publication.set_subscribed(true);
             }
         }
+    }
+
+    /// Set a image http url for the participant
+    ///
+    /// The image is loaded asynchronously and used when the participant has no camera or screenshare enabled
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Shared`] object lock couldn't be acquired.
+    pub fn set_participant_avatar_url(
+        &mut self,
+        identity: &ParticipantIdentity,
+        avatar_url: String,
+    ) {
+        async fn load_avatar_from_url(
+            http_client: reqwest::Client,
+            shared: Arc<StdMutex<Shared>>,
+            identity: ParticipantIdentity,
+            avatar_url: &str,
+        ) -> Result<()> {
+            let response = http_client
+                .get(avatar_url)
+                .send()
+                .await
+                .context("Failed to send a HTTP request")?;
+
+            if !response.status().is_success() {
+                bail!("Got unexpected {} response", response.status());
+            }
+
+            let bytes = response
+                .bytes()
+                .await
+                .context("Failed to receive HTTP response")?;
+
+            let avatar = ::image::load_from_memory(&bytes)
+                .context("Failed to load image from HTTP response")?;
+
+            let mut shared = shared.lock().unwrap();
+
+            if let Some(participant) = shared.participants.get_mut(&identity) {
+                participant.avatar = Some(
+                    video::placeholder::avatar_to_placeholder(&avatar)
+                        .context("Failed to convert received avatar to I420Buffer")?,
+                );
+            }
+
+            Ok(())
+        }
+
+        // Return early if the participant doesn't exist
+        if !self
+            .shared
+            .lock()
+            .unwrap()
+            .participants
+            .contains_key(identity)
+        {
+            return;
+        }
+
+        let http_client = self.http_client.clone();
+        let shared = self.shared.clone();
+        let identity = identity.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = load_avatar_from_url(http_client, shared, identity, &avatar_url).await {
+                log::warn!("Failed to fetch avatar from url={avatar_url}, error={e:?}");
+            }
+        });
     }
 
     /// # Panics
