@@ -278,7 +278,7 @@ impl Mixer {
                 participant,
             } => match track {
                 RemoteTrack::Audio(audio_track) => {
-                    self.add_audio_track(audio_track);
+                    self.add_audio_track(participant.identity(), audio_track);
                 }
                 RemoteTrack::Video(video_track) => {
                     self.add_video_track(participant, video_track);
@@ -426,20 +426,32 @@ impl Mixer {
         self.shared.lock().unwrap().event_title = Some(title);
     }
 
-    fn add_audio_track(&mut self, audio_track: RemoteAudioTrack) {
+    fn add_audio_track(
+        &mut self,
+        participant_identity: ParticipantIdentity,
+        audio_track: RemoteAudioTrack,
+    ) {
+        let rtc_track = audio_track.rtc_track();
         self.audio_mixer_handle
             .lock()
             .access_no_wait(move |audio_mixer| {
                 audio_mixer.add_source(AudioConvert::new(NativeAudioStreamSource {
-                    stream: NativeAudioStream::new(audio_track.rtc_track(), 48_000, 2),
+                    stream: NativeAudioStream::new(rtc_track, 48_000, 2),
                     timestamp: 0,
                 }));
             });
+
+        self.video_stream_tx
+            .send(VideoStreamCommand::AddAudioTrack((
+                participant_identity,
+                audio_track,
+            )))
+            .expect("unable to send add event to video_stream_tx");
     }
 
     fn add_video_track(&mut self, participant: RemoteParticipant, video_track: RemoteVideoTrack) {
         self.video_stream_tx
-            .send(VideoStreamCommand::Add((
+            .send(VideoStreamCommand::AddVideoTrack((
                 participant.identity(),
                 video_track.clone(),
                 Box::pin(

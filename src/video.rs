@@ -24,13 +24,14 @@ use futures::{stream::SelectAll, Stream, StreamExt};
 use image::DynamicImage;
 use livekit::{
     id::{ParticipantIdentity, TrackSid},
-    track::{RemoteVideoTrack, TrackSource},
+    track::{RemoteAudioTrack, RemoteVideoTrack, TrackSource},
     webrtc::video_frame::{I420Buffer, VideoBuffer},
 };
+use resvg::tiny_skia::Color;
 use tokio::{
     sync::{broadcast, mpsc, oneshot, Mutex},
     task::JoinHandle,
-    time::{interval_at, MissedTickBehavior},
+    time::{interval_at, Interval, MissedTickBehavior},
 };
 
 use crate::{
@@ -47,7 +48,8 @@ pub(crate) type VideoStream = Pin<Box<dyn Stream<Item = FrameInfo> + Send>>;
 pub(crate) type NewVideoStream = (ParticipantIdentity, RemoteVideoTrack, VideoStream);
 
 pub(crate) enum VideoStreamCommand {
-    Add(NewVideoStream),
+    AddVideoTrack(NewVideoStream),
+    AddAudioTrack((ParticipantIdentity, RemoteAudioTrack)),
     RemoveParticipant(ParticipantIdentity),
     RemoveTrack(TrackSid),
     Mute(TrackSid),
@@ -63,10 +65,13 @@ pub(crate) struct VideoPipeline {
     // Participant placerholder image when there's no video frames to display
     placeholder_image: I420Buffer,
 
+    mic_off_image: Image<Vec<u8>>,
+    cam_off_image: Image<Vec<u8>>,
+
     pub(crate) sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
     pub(crate) shared: Arc<StdMutex<Shared>>,
 
-    pub(crate) video_streams_rx: mpsc::UnboundedReceiver<VideoStreamCommand>,
+    pub(crate) commands_rx: mpsc::UnboundedReceiver<VideoStreamCommand>,
     pub(crate) video_sources: SelectAll<VideoStream>,
     pub(crate) video_frames: HashMap<TrackSid, I420Buffer>,
     pub(crate) tracks: HashMap<TrackSid, TrackData>,
@@ -151,9 +156,11 @@ impl VideoPipeline {
                 resizer: Resizer::new(ResizeAlg::Interpolation(FilterType::Bilinear)),
                 resize_staging_buffer: Image::blank(PixelFormat::I420, WIDTH, HEIGHT, I420_COLOR),
                 placeholder_image: load_placeholder_image()?,
+                mic_off_image: load_svg(include_bytes!("../assets/mic-off.svg"))?,
+                cam_off_image: load_svg(include_bytes!("../assets/camera-off.svg"))?,
                 sinks,
                 shared,
-                video_streams_rx,
+                commands_rx: video_streams_rx,
                 video_sources: SelectAll::default(),
                 video_frames: HashMap::default(),
                 tracks: HashMap::default(),
@@ -234,51 +241,8 @@ impl VideoPipeline {
                         .await
                         .expect("Failed to receive self from the blocking threadpool");
                 }
-                Some(video_stream_command) = self.video_streams_rx.recv() => {
-                    match video_stream_command {
-                        VideoStreamCommand::Add((participant_identity, video_track, stream)) => {
-                            self.tracks.insert(video_track.sid(), TrackData {
-                                participant_identity,
-                                source: video_track.source(),
-                                is_muted: false,
-                            });
-                            self.video_sources.push(stream);
-                        },
-                        VideoStreamCommand::RemoveParticipant(participant_identity) => {
-                            self.shared.lock().unwrap().participants.remove(&participant_identity);
-                            let tracks = self
-                                .tracks
-                                .clone()
-                                .into_iter()
-                                .filter(|(_, track_data)| track_data.participant_identity == participant_identity);
-
-                            for (track_sid, _) in tracks {
-                                self.video_frames.remove(&track_sid);
-                                self.tracks.remove(&track_sid);
-                            }
-                        }
-                        VideoStreamCommand::RemoveTrack(track_sid) => {
-                            self.video_frames.remove(&track_sid);
-                            self.tracks.remove(&track_sid);
-                        }
-                        VideoStreamCommand::Mute(track_sid) => {
-                            if let Some(track) = self.tracks.get_mut(&track_sid) {
-                                track.is_muted = true;
-                            }
-                            self.video_frames.remove(&track_sid);
-                        }
-                        VideoStreamCommand::Unmute(track_sid) => {
-                            if let Some(track) = self.tracks.get_mut(&track_sid) {
-                                track.is_muted = false;
-                            }
-                        }
-                        VideoStreamCommand::SetTargetFps(target_fps) => {
-                            self.target_fps = target_fps;
-                            let delta = Duration::from_secs_f64(1. / f64::from(self.target_fps));
-                            rerender_interval = interval_at((last_frame + delta).into(), delta);
-                            rerender_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                        }
-                    }
+                Some(command) = self.commands_rx.recv() => {
+                    self.handle_command(command, last_frame, &mut rerender_interval);
                 }
                 Some(frame_info) = self.video_sources.next() => self.handle_new_video_frame(frame_info),
             }
@@ -290,8 +254,74 @@ impl VideoPipeline {
             }
         }
     }
+    fn handle_command(
+        &mut self,
+        command: VideoStreamCommand,
+        last_frame: Instant,
+        rerender_interval: &mut Interval,
+    ) {
+        match command {
+            VideoStreamCommand::AddVideoTrack((participant_identity, video_track, stream)) => {
+                self.tracks.insert(
+                    video_track.sid(),
+                    TrackData {
+                        participant_identity,
+                        source: video_track.source(),
+                        is_muted: video_track.is_muted(),
+                    },
+                );
+                self.video_sources.push(stream);
+            }
+            VideoStreamCommand::AddAudioTrack((participant_identity, audio_track)) => {
+                self.tracks.insert(
+                    audio_track.sid(),
+                    TrackData {
+                        participant_identity,
+                        source: audio_track.source(),
+                        is_muted: audio_track.is_muted(),
+                    },
+                );
+            }
+            VideoStreamCommand::RemoveParticipant(participant_identity) => {
+                self.shared
+                    .lock()
+                    .unwrap()
+                    .participants
+                    .remove(&participant_identity);
+                let tracks = self.tracks.clone().into_iter().filter(|(_, track_data)| {
+                    track_data.participant_identity == participant_identity
+                });
 
-    #[allow(clippy::many_single_char_names)]
+                for (track_sid, _) in tracks {
+                    self.video_frames.remove(&track_sid);
+                    self.tracks.remove(&track_sid);
+                }
+            }
+            VideoStreamCommand::RemoveTrack(track_sid) => {
+                self.video_frames.remove(&track_sid);
+                self.tracks.remove(&track_sid);
+            }
+            VideoStreamCommand::Mute(track_sid) => {
+                if let Some(track) = self.tracks.get_mut(&track_sid) {
+                    track.is_muted = true;
+                }
+                self.video_frames.remove(&track_sid);
+            }
+            VideoStreamCommand::Unmute(track_sid) => {
+                if let Some(track) = self.tracks.get_mut(&track_sid) {
+                    track.is_muted = false;
+                }
+            }
+            VideoStreamCommand::SetTargetFps(target_fps) => {
+                self.target_fps = target_fps;
+                let delta = Duration::from_secs_f64(1. / f64::from(self.target_fps));
+                *rerender_interval = interval_at((last_frame + delta).into(), delta);
+                rerender_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            }
+        }
+    }
+
+    #[allow(clippy::many_single_char_names, clippy::too_many_lines)]
     fn rerender_frame(&mut self) -> Result<()> {
         let shared = self.shared.lock().unwrap();
         let mut base_image_buf = self.base_image.clone();
@@ -324,23 +354,29 @@ impl VideoPipeline {
         );
 
         // ==== Render All Participants  ====
-        let tracks = get_sorted_tracks(
+        let participants_to_show = get_participants_to_show(
             &self.tracks,
             &self.video_frames,
             &shared.participants,
             &shared.speakers,
         );
 
-        let tracks_len = tracks.len();
-        for (pos, active_track) in tracks.into_iter().take(8).enumerate() {
-            let i420_video = if let Some(i420_video) = active_track.i420_video {
+        let participants_to_show_len = participants_to_show.len();
+        for (pos, participant_to_show) in participants_to_show.into_iter().take(8).enumerate() {
+            let i420_video = if let Some((i420_video, _)) = participant_to_show.i420_video {
                 i420_video
             } else {
                 &self.placeholder_image
             };
 
             // Resize image to fit
-            let mut window = calculate_speaker_view(pos, tracks_len.min(8), WIDTH, HEIGHT, PADDING);
+            let mut window = calculate_speaker_view(
+                pos,
+                participants_to_show_len.min(8),
+                WIDTH,
+                HEIGHT,
+                PADDING,
+            );
 
             let original_aspect_ratio = i420_video.width() as f32 / i420_video.height() as f32;
 
@@ -374,7 +410,7 @@ impl VideoPipeline {
                 height: window.height + BORDER,
             };
 
-            let col = if active_track.is_speaking {
+            let col = if participant_to_show.is_speaking {
                 YuvColor::rgb_to_yuv(209, 229, 69)
             } else {
                 YuvColor::rgb_to_yuv(32, 67, 79)
@@ -391,7 +427,7 @@ impl VideoPipeline {
 
             // ==== Render Participant Name ====
 
-            let simple_text = SimpleText::new(24.0, &active_track.participant.display_name);
+            let simple_text = SimpleText::new(24.0, &participant_to_show.participant.display_name);
             let text_box = TextBox::new(simple_text);
             text_box.draw(
                 Point::new(
@@ -400,6 +436,83 @@ impl VideoPipeline {
                 ),
                 &mut base_image,
             );
+
+            // Render mute icons
+            if let Some((_, track_source)) = participant_to_show.i420_video {
+                let source = match track_source {
+                    TrackSource::Camera => TrackSource::Microphone,
+                    TrackSource::Screenshare => {
+                        let participant_has_camera = self.tracks.values().any(|t| {
+                            t.participant_identity == *participant_to_show.participant_identity
+                                && t.source == TrackSource::Camera
+                                && !t.is_muted
+                        });
+
+                        // TODO: if we ever use screenshare audio we can return TrackSource::ScreenShare audio here instead
+                        if participant_has_camera {
+                            continue;
+                        }
+
+                        TrackSource::Microphone
+                    }
+                    _ => continue,
+                };
+
+                let participant_has_audio = self.tracks.values().any(|t| {
+                    t.participant_identity == *participant_to_show.participant_identity
+                        && t.source == source
+                        && !t.is_muted
+                });
+
+                if !participant_has_audio {
+                    let window = Window {
+                        x: window.x + 10,
+                        y: window.y + 10,
+                        width: self.mic_off_image.width(),
+                        height: self.mic_off_image.height(),
+                    };
+
+                    ezk_image::copy(
+                        &self.mic_off_image,
+                        &mut Cropped::new(&mut base_image, window)?,
+                    )?;
+                }
+            } else {
+                // We're not rendering a any video tracks for this participant, always render the camera off icon
+                let window = Window {
+                    x: window.x + 10,
+                    y: window.y + 10,
+                    width: self.cam_off_image.width(),
+                    height: self.cam_off_image.height(),
+                };
+
+                ezk_image::copy(
+                    &self.cam_off_image,
+                    &mut Cropped::new(&mut base_image, window)?,
+                )?;
+
+                // If there's not any audio for this participant of any kind - render the mic off icon on the current tile
+                let has_any_audio = self.tracks.values().any(|track_data| {
+                    track_data.participant_identity == *participant_to_show.participant_identity
+                        && (track_data.source == TrackSource::Microphone
+                            || track_data.source == TrackSource::ScreenshareAudio)
+                        && !track_data.is_muted
+                });
+
+                if !has_any_audio {
+                    let window = Window {
+                        x: window.x + 46,
+                        y: window.y,
+                        width: self.mic_off_image.width(),
+                        height: self.mic_off_image.height(),
+                    };
+
+                    ezk_image::copy(
+                        &self.mic_off_image,
+                        &mut Cropped::new(&mut base_image, window)?,
+                    )?;
+                }
+            }
         }
 
         // ==== push image into GStreamer pipeline ====
@@ -412,6 +525,44 @@ impl VideoPipeline {
 
         Ok(())
     }
+}
+
+fn load_svg(source: &'static [u8]) -> Result<Image<Vec<u8>>> {
+    use resvg::tiny_skia::Pixmap;
+    use resvg::usvg::{Options, Transform, Tree};
+
+    // SCALE = Quality (1x scale is 24x24 px icon) (currently hardcoded for mic-off/cam-off icons)
+    const SCALE: f32 = 1.5;
+    const SIZE: u32 = (24.0 * SCALE) as u32;
+
+    let options = Options::default();
+
+    let tree = Tree::from_data(source, &options).context("Failed to load SVG from source")?;
+
+    let mut pixmap = Pixmap::new(SIZE, SIZE).context("Failed to create pixmap")?;
+    pixmap.fill(Color::from_rgba8(0x13, 0x26, 0x2d, 0xFF));
+    resvg::render(
+        &tree,
+        Transform::from_scale(SCALE, SCALE),
+        &mut pixmap.as_mut(),
+    );
+
+    let pixmap = Image::from_buffer(
+        PixelFormat::RGBA,
+        pixmap.data(),
+        None,
+        SIZE as usize,
+        SIZE as usize,
+        I420_COLOR,
+    )
+    .context("Failed to create Image from pixmap")?;
+
+    let mut i420_icon = Image::blank(PixelFormat::I420, SIZE as usize, SIZE as usize, I420_COLOR);
+
+    ezk_image::convert(&pixmap, &mut i420_icon)
+        .context("Failed to convert SVG icon from RGBA to I420")?;
+
+    Ok(i420_icon)
 }
 
 fn load_placeholder_image() -> Result<I420Buffer> {
@@ -510,18 +661,19 @@ fn horizontal_line(
     }
 }
 
-struct ActiveTracks<'a> {
+struct ParticipantToShow<'a> {
     participant: &'a Participant,
-    i420_video: Option<&'a I420Buffer>,
+    participant_identity: &'a ParticipantIdentity,
+    i420_video: Option<(&'a I420Buffer, TrackSource)>,
     is_speaking: bool,
 }
 
-fn get_sorted_tracks<'a>(
+fn get_participants_to_show<'a>(
     tracks: &'a HashMap<TrackSid, TrackData>,
     video_frames: &'a HashMap<TrackSid, I420Buffer>,
     participants: &'a HashMap<ParticipantIdentity, Participant>,
     speakers: &HashMap<ParticipantIdentity, SpeakingState>,
-) -> Vec<ActiveTracks<'a>> {
+) -> Vec<ParticipantToShow<'a>> {
     let mut participant_sort_items = participants
         .iter()
         .map(|(identity, participant)| {
@@ -549,12 +701,18 @@ fn get_sorted_tracks<'a>(
             |(identity, participant, _has_screenshare, speaking_state)| {
                 let mut tracks = tracks
                     .iter()
-                    .filter(|(_track_id, track_data)| track_data.participant_identity == *identity)
+                    .filter(|(_track_id, track_data)| {
+                        track_data.participant_identity == *identity
+                            && (track_data.source == TrackSource::Camera
+                                || track_data.source == TrackSource::Screenshare)
+                            && !track_data.is_muted
+                    })
                     .collect::<Vec<_>>();
 
                 if tracks.is_empty() {
-                    vec![ActiveTracks {
+                    vec![ParticipantToShow {
                         participant,
+                        participant_identity: identity,
                         i420_video: None,
                         is_speaking: speaking_state.is_some_and(|state| state.is_speaking),
                     }]
@@ -563,9 +721,10 @@ fn get_sorted_tracks<'a>(
 
                     tracks
                         .into_iter()
-                        .map(|(track_id, _track_data)| ActiveTracks {
+                        .map(|(track_id, track_data)| ParticipantToShow {
                             participant,
-                            i420_video: video_frames.get(track_id),
+                            participant_identity: identity,
+                            i420_video: video_frames.get(track_id).map(|f| (f, track_data.source)),
                             is_speaking: speaking_state.is_some_and(|state| state.is_speaking),
                         })
                         .collect::<Vec<_>>()

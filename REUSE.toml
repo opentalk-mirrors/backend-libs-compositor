@@ -12,3 +12,11 @@ SPDX-FileCopyrightText = "OpenTalk GmbH <mail@opentalk.eu>"
 SPDX-License-Identifier = "EUPL-1.2"
 path = ["renovate.json"]
 precedence = "aggregate"
+
+[[annotations]]
+path = [
+  "assets/**.svg",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "OpenTalk GmbH <mail@opentalk.eu>"
+SPDX-License-Identifier = "CC-BY-NC-ND-4.0"

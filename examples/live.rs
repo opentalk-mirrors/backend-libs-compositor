@@ -93,7 +93,7 @@ mod example {
             let mut interval = interval_at(Instant::now() + duration, duration);
             loop {
                 select! {
-                    _ = mixer.run() => { }
+                    _ = mixer.run() => {}
                     _ = interval.tick() => {
                         mixer.set_target_fps(5);
                     }
