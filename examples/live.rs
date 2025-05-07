@@ -27,7 +27,7 @@ mod example {
 
     #[tokio::main]
     pub(crate) async fn main() -> anyhow::Result<()> {
-        pretty_env_logger::init();
+        env_logger::init();
 
         gst::init()?;
 

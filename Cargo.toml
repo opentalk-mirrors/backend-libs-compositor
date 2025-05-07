@@ -32,11 +32,12 @@ gst = { package = "gstreamer", version = "0.23", features = ["v1_22"], optional 
 gst-app = { package = "gstreamer-app", version = "0.23", features = ["v1_22"], optional = true }
 gst-base = { package = "gstreamer-base", version = "0.23", features = ["v1_22"], optional = true }
 image = { version = "0.25.2", default-features = false, features = ["png"] }
-livekit = { version = "=0.7.9", features = ["rustls-tls-native-roots"] }                           # Livekit released another incompatible non-semver compliant patch version
+livekit = { version = "=0.7.9", features = ["rustls-tls-native-roots"] }
 livekit-api = "0.4"
 log = "0.4"
 parking_lot = "0.12.3"
-pretty_env_logger = "0.5"
+reqwest = "0.11"
+resvg = "0.45.1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["signal", "sync", "time", "macros", "rt-multi-thread"] }
 uuid = { version = "1.10.0", features = ["v4"] }
