@@ -71,7 +71,7 @@ impl RTMPSink {
             format!(
                 r#"
             name="RTMP-Sink"
-                
+
             videoconvert
                 name=video
             ! {encoder_type}

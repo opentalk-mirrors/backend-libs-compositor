@@ -147,7 +147,7 @@ mod imp {
             static ELEMENT_METADATA: LazyLock<gst::subclass::ElementMetadata> = LazyLock::new(
                 || {
                     gst::subclass::ElementMetadata::new(
-                    "OpenTalkMatroskaS3Sink", 
+                    "OpenTalkMatroskaS3Sink",
                     "Sink/Network",
                     "Split a matroska stream into chunks that can be uploaded using the S3 multipart API",
                     "Konstantin Baltruschat"
@@ -367,10 +367,10 @@ mod tests {
 
         videotestsrc
                 num-buffers=240
-            ! video/x-raw,width=1920,height=1080,framerate=24/1 
-            ! vp8enc 
+            ! video/x-raw,width=1920,height=1080,framerate=24/1
+            ! vp8enc
             ! mux.
-            
+
         webmmux
                 name=mux
                 writing-app=OpenTalk
