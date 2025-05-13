@@ -161,7 +161,7 @@ skip = [
   { name = "rand_core", version = "0.6" },
   { name = "thiserror", version = "1" },
   { name = "thiserror-impl", version = "1" },
-  { name = "getrandom", version = "=0.3.2" },
+  { name = "getrandom", version = "=0.2.16" },
 ]
 # Similarly to `skip` allows you to skip certain crates during duplicate
 # detection. Unlike skip, it also includes the entire tree of transitive
