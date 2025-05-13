@@ -4,7 +4,7 @@
 
 [package]
 name = "opentalk-compositor"
-version = "0.15.0"
+version = "0.15.1"
 authors = ["OpenTalk Team <mail@opentalk.eu>"]
 edition = "2021"
 description = "Compositor for the OpenTalk Recorder and Obelisk"
@@ -36,7 +36,7 @@ livekit = { version = "=0.7.9", features = ["rustls-tls-native-roots"] }
 livekit-api = "0.4"
 log = "0.4"
 parking_lot = "0.12.3"
-reqwest = "0.11"
+reqwest = { version = "0.11", default-features = false }
 resvg = "0.45.1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["signal", "sync", "time", "macros", "rt-multi-thread"] }
