@@ -182,7 +182,7 @@ async fn audio_mixer_task_inner(
             match event {
                 SourceEvent::Frame(frame) => {
                     for sink in sinks.lock().await.values_mut() {
-                        if let Err(err) = sink.on_audio_frame(frame.clone()) {
+                        if let Err(err) = sink.on_audio_frame(frame.clone()).await {
                             log::error!("Unable to push audio: {err:?}");
                         }
                     }

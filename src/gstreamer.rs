@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{fmt::Debug, time::Instant};
+use std::{fmt::Debug, future::ready, time::Instant};
 
 use anyhow::{Context, Result};
 use ezk::Frame;
 use ezk_audio::RawAudio;
+use futures::{future::BoxFuture, FutureExt};
 use glib::object::Cast;
 use gst::{
     prelude::{ElementExt, GstBinExt, PipelineExt},
@@ -194,7 +195,7 @@ impl GStreamerActiveSink {
 }
 
 impl Sink for GStreamerActiveSink {
-    fn on_audio_frame(&mut self, frame: Frame<RawAudio>) -> Result<()> {
+    fn on_audio_frame(&mut self, frame: Frame<RawAudio>) -> BoxFuture<'_, Result<()>> {
         let samples = frame.data().samples.as_bytes();
         let mut buffer = gst::Buffer::with_size(samples.len())
             .expect("unable to initialize gstreamer buffer with size");
@@ -223,7 +224,7 @@ impl Sink for GStreamerActiveSink {
             log::error!("Unable to push audio sample {sample:?}, received: {err:?}");
         }
 
-        Ok(())
+        ready(Ok(())).boxed()
     }
 
     fn on_video_frame(&mut self, buffer: &[u8]) -> Result<()> {

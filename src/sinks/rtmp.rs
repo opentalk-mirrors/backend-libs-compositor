@@ -128,17 +128,14 @@ impl RTMPSink {
 }
 
 impl GStreamerSink for RTMPSink {
-    #[must_use]
     fn video(&self) -> GhostPad {
         self.video_sink_pad.clone()
     }
 
-    #[must_use]
     fn audio(&self) -> GhostPad {
         self.audio_sink_pad.clone()
     }
 
-    #[must_use]
     fn bin(&self) -> Bin {
         self.bin.clone()
     }
