@@ -56,17 +56,14 @@ impl SystemSink {
 
 impl GStreamerSink for SystemSink {
     /// Get video sink pad.
-    #[must_use]
     fn video(&self) -> GhostPad {
         self.video_sink.clone()
     }
 
     /// Get audio sink pad.
-    #[must_use]
     fn audio(&self) -> GhostPad {
         self.audio_sink.clone()
     }
-    #[must_use]
     fn bin(&self) -> Bin {
         self.bin.clone()
     }

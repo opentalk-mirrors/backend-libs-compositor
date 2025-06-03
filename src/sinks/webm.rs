@@ -150,17 +150,14 @@ impl WebMSink {
 }
 
 impl GStreamerSink for WebMSink {
-    #[must_use]
     fn video(&self) -> GhostPad {
         self.video_sink.clone()
     }
 
-    #[must_use]
     fn audio(&self) -> GhostPad {
         self.audio_sink.clone()
     }
 
-    #[must_use]
     fn bin(&self) -> Bin {
         self.bin.clone()
     }

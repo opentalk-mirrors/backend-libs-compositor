@@ -7,6 +7,7 @@ use std::fmt::Debug;
 use anyhow::Result;
 use ezk::Frame;
 use ezk_audio::RawAudio;
+use futures::future::BoxFuture;
 use serde::Deserialize;
 
 #[cfg(feature = "gstreamer")]
@@ -32,7 +33,7 @@ pub enum EncoderType {
 // TODO: This will be fixed later on
 #[allow(clippy::missing_errors_doc)]
 pub trait Sink: Send + Debug {
-    fn on_audio_frame(&mut self, frame: Frame<RawAudio>) -> Result<()>;
+    fn on_audio_frame(&mut self, frame: Frame<RawAudio>) -> BoxFuture<'_, Result<()>>;
 
     fn on_video_frame(&mut self, buffer: &[u8]) -> Result<()>;
 }
