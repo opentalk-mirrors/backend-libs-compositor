@@ -27,10 +27,10 @@ ezk = "0.1"
 ezk-audio = "0.1"
 ezk-image = "0.2"
 futures = "0.3"
-glib = { version = "0.20", optional = true }
-gst = { package = "gstreamer", version = "0.23", features = ["v1_22"], optional = true }
-gst-app = { package = "gstreamer-app", version = "0.23", features = ["v1_22"], optional = true }
-gst-base = { package = "gstreamer-base", version = "0.23", features = ["v1_22"], optional = true }
+glib = { version = "0.21", optional = true }
+gst = { package = "gstreamer", version = "0.24", features = ["v1_22"], optional = true }
+gst-app = { package = "gstreamer-app", version = "0.24", features = ["v1_22"], optional = true }
+gst-base = { package = "gstreamer-base", version = "0.24", features = ["v1_22"], optional = true }
 image = { version = "0.25.2", default-features = false, features = ["png"] }
 livekit = { version = "0.7.11", features = ["rustls-tls-native-roots"] }
 livekit-api = "0.4"
