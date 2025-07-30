@@ -10,7 +10,7 @@ exclude: target/|.*\.snap|.*.sql
 repos:
   # These are "general" hooks provided by the pre-commit devs
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v3.2.0
+    rev: v5.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -56,7 +56,7 @@ repos:
           - --workspace
           - --no-deps
   - repo: https://github.com/EmbarkStudios/cargo-deny
-    rev: 0.18.2
+    rev: 0.18.3
     hooks:
       - id: cargo-deny
         name: cargo deny bans licenses sources
@@ -76,7 +76,7 @@ repos:
       - id: taplo-format
       - id: taplo-lint
   - repo: https://github.com/adrienverge/yamllint.git
-    rev: v1.29.0
+    rev: v1.37.1
     hooks:
       - id: yamllint
         exclude: ^api/docs/openapi\.yml$
