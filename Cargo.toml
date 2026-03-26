@@ -27,17 +27,17 @@ ezk = "0.1"
 ezk-audio = "0.1"
 ezk-image = { version = "0.4", default-features = false, features = ["I420", "RGBA", "RGB", "multi-thread", "resize"] }
 futures = "0.3"
-glib = { version = "0.21", optional = true }
-gst = { package = "gstreamer", version = "0.24", features = ["v1_22"], optional = true }
-gst-app = { package = "gstreamer-app", version = "0.24", features = ["v1_22"], optional = true }
-gst-base = { package = "gstreamer-base", version = "0.24", features = ["v1_22"], optional = true }
+glib = { version = "0.22", optional = true }
+gst = { package = "gstreamer", version = "0.25", features = ["v1_22"], optional = true }
+gst-app = { package = "gstreamer-app", version = "0.25", features = ["v1_22"], optional = true }
+gst-base = { package = "gstreamer-base", version = "0.25", features = ["v1_22"], optional = true }
 image = { version = "0.25.2", default-features = false, features = ["png"] }
 livekit = { version = "0.7", features = ["rustls-tls-native-roots"] }
 livekit-api = "0.4"
 log = "0.4"
 parking_lot = "0.12.3"
-reqwest = { version = "0.11", default-features = false }
-resvg = "0.46.0"
+reqwest = { version = "0.12", default-features = false }
+resvg = "0.47.0"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["signal", "sync", "time", "macros", "rt-multi-thread"] }
 uuid = { version = "1.10.0", features = ["v4"] }
