@@ -4,7 +4,7 @@
 
 [package]
 name = "opentalk-compositor"
-version = "0.17.0"
+version = "0.18.0"
 authors = ["OpenTalk Team <mail@opentalk.eu>"]
 edition = "2021"
 description = "Compositor for the OpenTalk Recorder and Obelisk"
