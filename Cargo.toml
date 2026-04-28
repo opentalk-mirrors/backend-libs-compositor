@@ -43,4 +43,5 @@ tokio = { version = "1", features = ["signal", "sync", "time", "macros", "rt-mul
 uuid = { version = "1.10.0", features = ["v4"] }
 
 [dev-dependencies]
+axum = "0.8"
 env_logger = "0.11"
