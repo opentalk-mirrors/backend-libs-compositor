@@ -157,9 +157,9 @@ skip = [
   { name = "getrandom", version = "=0.2.17" },
   { name = "getrandom", version = "=0.3.4" },
   { name = "gio-sys", version = "=0.21.5" },
-  { name = "glib", version = "=0.21.5" },
   { name = "glib-macros", version = "=0.21.5" },
   { name = "glib-sys", version = "=0.21.5" },
+  { name = "glib", version = "=0.21.5" },
   { name = "gobject-sys", version = "=0.21.5" },
   { name = "heck", version = "=0.4.1" },
   { name = "http", version = "=0.2.12" },
@@ -173,11 +173,10 @@ skip = [
   { name = "rustls-native-certs", version = "=0.6.3" },
   { name = "rustls-webpki", version = "=0.101.7" },
   { name = "rustls", version = "=0.21.12" },
+  { name = "syn", version = "=1.0.109" },
   { name = "thiserror-impl", version = "1" },
   { name = "thiserror", version = "1" },
   { name = "tokio-rustls", version = "=0.24.1" },
-  { name = "toml_datetime", version = "=0.7.5+spec-1.1.0" },
-  { name = "winnow", version = "=0.7.15" },
 ]
 # Similarly to `skip` allows you to skip certain crates during duplicate
 # detection. Unlike skip, it also includes the entire tree of transitive

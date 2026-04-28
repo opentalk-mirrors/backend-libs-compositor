@@ -171,11 +171,16 @@ impl Mixer {
         let mut room_options = RoomOptions::default();
         room_options.auto_subscribe = false;
 
-        let (room, room_events) = Room::connect(
-            &parameters.livekit_url,
+        // Livekit uses the path_segment API from the `url` crate to build their signaling path, but they don't call the
+        // `pop` method on the path segments, which results in a double slash in the path if we do not trim the trailing
+        // slash here.
+        let livekit_url = parameters.livekit_url.trim_end_matches('/');
+
+        let (room, room_events) = Box::pin(Room::connect(
+            livekit_url,
             &parameters.livekit_token,
             room_options,
-        )
+        ))
         .await?;
 
         let shared = Arc::new(StdMutex::new(Shared {
@@ -657,4 +662,84 @@ pub fn create_token(
             ..Default::default()
         })
         .to_jwt()
+}
+
+#[cfg(test)]
+mod tests {
+
+    //! Providing an url with a trailing slash to livekit will result in an invalid livekit url with two slashes in the
+    //! path. These tests ensure that we are aware of breaking changes in their api in regards to the signaling url.
+    use std::net::SocketAddr;
+
+    use axum::{routing::get, Router};
+    use livekit_api::signal_client::{SignalError, SignalOptions};
+    use reqwest::StatusCode;
+
+    async fn spawn_mock_livekit_server() -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let mock_livekit = Router::new()
+                .route("/livekit/rtc", get(|| async { StatusCode::OK }))
+                .route("/livekit/rtc/validate", get(|| async { StatusCode::OK }))
+                .into_make_service();
+
+            axum::serve(listener, mock_livekit).await.unwrap();
+        });
+
+        addr
+    }
+
+    async fn connect_livekit_to_url(url: &str) -> Result<(), SignalError> {
+        livekit_api::signal_client::SignalClient::connect(
+            url,
+            "doesn't matter",
+            SignalOptions::default(),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn livekit_url_regression_test() {
+        let addr = spawn_mock_livekit_server().await;
+        let url = format!("http://{addr}/livekit");
+        let result = connect_livekit_to_url(&url).await;
+
+        match result {
+            Ok(_) => unreachable!(),
+            Err(e) => {
+                match e {
+                    SignalError::WsError(_) => {
+                        // success case, the livekit path was correct and we got a websocket error
+                        return;
+                    }
+                    other => {
+                        panic!("Expected a websocket error, but got a different error: {other:?}")
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn livekit_url_trailing_slash() {
+        let addr = spawn_mock_livekit_server().await;
+        let url = format!("http://{addr}/livekit/");
+        let result = connect_livekit_to_url(&url).await;
+
+        match result {
+            Ok(_) => unreachable!(),
+            Err(e) => match e {
+                SignalError::Client(status, ..) => {
+                    assert_eq!(status, StatusCode::NOT_FOUND);
+                    return;
+                }
+                other => {
+                    panic!("Expected a not found error, but got a different error: {other:?}")
+                }
+            },
+        }
+    }
 }
