@@ -696,6 +696,7 @@ mod tests {
             url,
             "doesn't matter",
             SignalOptions::default(),
+            None,
         )
         .await
         .map(|_| ())
