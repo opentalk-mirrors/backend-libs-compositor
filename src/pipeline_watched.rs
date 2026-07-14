@@ -6,7 +6,7 @@ use std::{ops::Deref, sync::Arc};
 
 use anyhow::{Context, Result};
 use glib::{ControlFlow, GString};
-use gst::{bus::BusWatchGuard, prelude::*, MessageView, Object, Pipeline};
+use gstreamer::{bus::BusWatchGuard, prelude::*, MessageView, Object, Pipeline};
 use log::{max_level, Level};
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
@@ -151,7 +151,7 @@ impl Drop for PipelineWatched {
                 debug::debug_dot(&self.pipeline, &format!("drop-{pipeline_name}"));
 
                 if let Some(eos) = self.eos.take() {
-                    self.pipeline.send_event(gst::event::Eos::new());
+                    self.pipeline.send_event(gstreamer::event::Eos::new());
 
                     trace!("wait for eos");
                     if let Err(err) = eos.await {
@@ -159,7 +159,7 @@ impl Drop for PipelineWatched {
                     }
                 }
 
-                if let Err(error) = self.pipeline.set_state(gst::State::Null) {
+                if let Err(error) = self.pipeline.set_state(gstreamer::State::Null) {
                     log::error!("Unable to set the pipeline to the `Null` state, error: {error}");
                 }
 

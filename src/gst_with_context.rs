@@ -7,7 +7,7 @@ use std::panic::Location;
 
 use anyhow::{Context, Result};
 use glib::object::{IsA, ObjectExt as _};
-use gst::{
+use gstreamer::{
     element_factory::ElementBuilder,
     prelude::{ElementExt, ElementExtManual, GstBinExt, GstBinExtManual, PadExt},
     Bin, Element, ElementFactory, GhostPad, Object, Pad, PadLinkSuccess, State, StateChangeSuccess,
@@ -20,7 +20,7 @@ pub trait GstBinErrorExt: IsA<Bin> {
             format!(
                 "Unable to add all elements '{:?}' to bin '{}' in {}",
                 elements.iter().map(|e| e.type_()).collect::<Vec<_>>(),
-                &self.type_(),
+                self.type_(),
                 Location::caller()
             )
         })
@@ -225,7 +225,7 @@ pub fn parse_bin_from_description_with_context(
     bin_description: &str,
     ghost_unlinked_pads: bool,
 ) -> Result<Bin> {
-    gst::parse::bin_from_description(bin_description, ghost_unlinked_pads).with_context(|| {
+    gstreamer::parse::bin_from_description(bin_description, ghost_unlinked_pads).with_context(|| {
             format!(
                 "Unable to parse bin from description with ghost_unlinked_pad={ghost_unlinked_pads} in {}.\nbin_description:\n{bin_description}",
                 Location::caller()

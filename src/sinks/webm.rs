@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use glib::object::ObjectExt;
-use gst::{Bin, GhostPad};
+use gstreamer::{Bin, GhostPad};
 use serde::Deserialize;
 use tokio::sync::broadcast;
 

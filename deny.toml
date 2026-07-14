@@ -41,8 +41,26 @@ yanked = "deny"
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-  # rsa - Marvin Attack: potential key recovery through timing sidechannels
-  "RUSTSEC-2023-0071",
+  # rustybuzz is unmaintained
+  # ├ rustybuzz v0.20.1
+  # └── usvg v0.47.0
+  #     └── resvg v0.47.0
+  #         └── opentalk-compositor v0.18.1
+  "RUSTSEC-2026-0206",
+
+  # ttf-parser is unmaintained
+  # ├ ttf-parser v0.25.1
+  # ├── fontdb v0.23.0
+  # │   └── usvg v0.47.0
+  # │       └── resvg v0.47.0
+  # │           └── opentalk-compositor v0.18.1
+  # ├── owned_ttf_parser v0.25.1
+  # │   └── ab_glyph v0.2.32
+  # │       └── opentalk-compositor v0.18.1 (*)
+  # ├── rustybuzz v0.20.1
+  # │   └── usvg v0.47.0 (*)
+  # └── usvg v0.47.0 (*)
+  "RUSTSEC-2026-0192",
 ]
 # Threshold for security vulnerabilities, any vulnerability with a CVSS score
 # lower than the range specified will be ignored. Note that ignored advisories
@@ -155,17 +173,9 @@ skip = [
   { name = "base64", version = "0.21" },
   { name = "getrandom", version = "=0.2.17" },
   { name = "getrandom", version = "=0.3.4" },
-  { name = "gio-sys", version = "=0.21.5" },
-  { name = "glib-macros", version = "=0.21.5" },
-  { name = "glib-sys", version = "=0.21.5" },
-  { name = "glib", version = "=0.21.5" },
-  { name = "gobject-sys", version = "=0.21.5" },
   { name = "heck", version = "=0.4.1" },
   { name = "itertools", version = "=0.11.0" },
   { name = "itertools", version = "=0.12.1" },
-  { name = "rand_chacha", version = "0.3" },
-  { name = "rand_core", version = "0.6" },
-  { name = "rand", version = "0.8.5" },
   { name = "roxmltree", version = "=0.20.0" },
   { name = "syn", version = "=1.0.109" },
   { name = "thiserror-impl", version = "1" },

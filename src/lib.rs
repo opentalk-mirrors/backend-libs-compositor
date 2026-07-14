@@ -9,8 +9,8 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use anyhow::{bail, Context, Result};
 use audio::{audio_mixer_task, NativeAudioStreamSource, Silence};
-use audio_nodes::{AudioConvert, AudioMixer};
 use ezk::nodes::{Access, AccessHandle};
+use ezk_audio_nodes::{AudioConvert, AudioMixer};
 use ezk_image::{ColorInfo, ColorPrimaries, ColorSpace, ColorTransfer, YuvColorInfo};
 use futures::StreamExt;
 use livekit::webrtc::prelude::I420Buffer;

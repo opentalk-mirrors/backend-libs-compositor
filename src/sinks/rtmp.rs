@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use anyhow::{Context, Result};
-use gst::{Bin, GhostPad};
+use gstreamer::{Bin, GhostPad};
 use serde::Deserialize;
 
 use crate::{
