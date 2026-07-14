@@ -16,21 +16,21 @@ publish = true
 
 [features]
 default = ["gstreamer"]
-gstreamer = ["glib", "gst-app", "gst-base", "gst"]
+gstreamer = ["dep:glib", "dep:gstreamer-app", "dep:gstreamer-base", "dep:gstreamer"]
 
 [dependencies]
 ab_glyph = "0.2"
 anyhow = "1.0"
-audio-nodes = { package = "ezk-audio-nodes", version = "0.1" }
 chrono = "0.4"
 ezk = "0.1"
 ezk-audio = "0.1"
+ezk-audio-nodes = "0.1"
 ezk-image = { version = "0.4", default-features = false, features = ["I420", "RGBA", "RGB", "multi-thread", "resize"] }
 futures = "0.3"
 glib = { version = "0.22", optional = true }
-gst = { package = "gstreamer", version = "0.25", features = ["v1_22"], optional = true }
-gst-app = { package = "gstreamer-app", version = "0.25", features = ["v1_22"], optional = true }
-gst-base = { package = "gstreamer-base", version = "0.25", features = ["v1_22"], optional = true }
+gstreamer = { version = "0.25", features = ["v1_22"], optional = true }
+gstreamer-app = { version = "0.25", features = ["v1_22"], optional = true }
+gstreamer-base = { version = "0.25", features = ["v1_22"], optional = true }
 image = { version = "0.25.2", default-features = false, features = ["png"] }
 livekit = { version = "0.7", features = ["rustls-tls-native-roots"] }
 livekit-api = "0.5"

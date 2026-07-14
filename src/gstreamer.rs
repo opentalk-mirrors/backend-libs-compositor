@@ -9,12 +9,12 @@ use ezk::Frame;
 use ezk_audio::RawAudio;
 use futures::{future::BoxFuture, FutureExt};
 use glib::object::Cast;
-use gst::{
+use gstreamer::{
     prelude::{ElementExt, GstBinExt, PipelineExt},
     Bin, Buffer, ClockTime, Element, ElementFactory, Fraction, GhostPad, Sample, State,
     SystemClock,
 };
-use gst_app::AppSrc;
+use gstreamer_app::AppSrc;
 
 use super::pipeline_watched::PipelineWatched;
 use crate::{
@@ -69,7 +69,7 @@ impl GStreamerActiveSink {
         let audio_src = AppSrc::builder()
             .name("audiosrc")
             .caps(
-                &gst::Caps::builder("audio/x-raw")
+                &gstreamer::Caps::builder("audio/x-raw")
                     .field("format", "S16LE")
                     .field("layout", "interleaved")
                     .field("rate", SAMPLE_RATE as i32)
@@ -77,7 +77,7 @@ impl GStreamerActiveSink {
                     .build(),
             )
             .min_latency(200_000_000i64)
-            .format(gst::Format::Time)
+            .format(gstreamer::Format::Time)
             .max_bytes(1)
             .block(true)
             .is_live(true)
@@ -86,7 +86,7 @@ impl GStreamerActiveSink {
         let video_src = AppSrc::builder()
             .name("videosrc")
             .caps(
-                &gst::Caps::builder("video/x-raw")
+                &gstreamer::Caps::builder("video/x-raw")
                     .field("format", "I420")
                     .field("width", WIDTH as i32)
                     .field("height", HEIGHT as i32)
@@ -94,7 +94,7 @@ impl GStreamerActiveSink {
                     .build(),
             )
             .min_latency(200_000_000i64)
-            .format(gst::Format::Time)
+            .format(gstreamer::Format::Time)
             .max_bytes(1)
             .block(true)
             .is_live(true)
@@ -197,21 +197,21 @@ impl GStreamerActiveSink {
 impl Sink for GStreamerActiveSink {
     fn on_audio_frame(&mut self, frame: Frame<RawAudio>) -> BoxFuture<'_, Result<()>> {
         let samples = frame.data().samples.as_bytes();
-        let mut buffer = gst::Buffer::with_size(samples.len())
+        let mut buffer = gstreamer::Buffer::with_size(samples.len())
             .expect("unable to initialize gstreamer buffer with size");
         let mut_buffer = buffer.make_mut();
         mut_buffer
             .copy_from_slice(0, samples)
             .expect("unable to copy mut_buffer from slice samples: {samples:?}");
 
-        mut_buffer.set_pts(gst::ClockTime::from_mseconds(
+        mut_buffer.set_pts(gstreamer::ClockTime::from_mseconds(
             Instant::now().duration_since(self.start).as_millis() as u64,
         ));
 
         let sample = Sample::builder()
             .buffer(&buffer)
             .caps(
-                &gst::Caps::builder("audio/x-raw")
+                &gstreamer::Caps::builder("audio/x-raw")
                     .field("format", "S16LE")
                     .field("layout", "interleaved")
                     .field("rate", SAMPLE_RATE as i32)
@@ -234,14 +234,14 @@ impl Sink for GStreamerActiveSink {
             .copy_from_slice(0, buffer)
             .ok()
             .context("unable to copy from slice")?;
-        mut_gstreamer_buffer.set_pts(gst::ClockTime::from_mseconds(
+        mut_gstreamer_buffer.set_pts(gstreamer::ClockTime::from_mseconds(
             Instant::now().duration_since(self.start).as_millis() as u64,
         ));
 
         let sample = Sample::builder()
             .buffer(&gstreamer_buffer)
             .caps(
-                &gst::Caps::builder("video/x-raw")
+                &gstreamer::Caps::builder("video/x-raw")
                     .field("format", "I420")
                     .field("width", WIDTH as i32)
                     .field("height", HEIGHT as i32)

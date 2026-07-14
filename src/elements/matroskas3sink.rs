@@ -7,7 +7,7 @@ use glib::types::StaticType;
 
 glib::wrapper! {
     pub struct MatroskaS3Sink(ObjectSubclass<imp::MatroskaS3Sink>)
-        @extends gst::Object, gst::Element, gst_base::BaseSink;
+        @extends gstreamer::Object, gstreamer::Element, gstreamer_base::BaseSink;
 }
 
 // This should be 5 MiB, regarding the S3 specifications
@@ -17,10 +17,10 @@ pub(crate) const DEFAULT_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
 ///
 /// Returns an error if Gstreamer is not initialized or this function was already called in this proccess.
 pub fn register() -> anyhow::Result<()> {
-    gst::Element::register(
+    gstreamer::Element::register(
         None,
         "opentalk-matroska-s3-sink",
-        gst::Rank::NONE,
+        gstreamer::Rank::NONE,
         MatroskaS3Sink::static_type(),
     )
     .context("Failed to register opentalk-matroska-s3-sink")
@@ -35,7 +35,7 @@ mod imp {
 
     use anyhow::{Context, Result};
     use glib::{object::ObjectExt, value::ToValue, BorrowedObject, ParamSpecBuilderExt};
-    use gst::{
+    use gstreamer::{
         format::Bytes,
         glib::{self, subclass::Signal},
         prelude::StaticType,
@@ -44,15 +44,15 @@ mod imp {
         },
         EventView, Format, GenericFormattedValue, QueryViewMut, StreamError,
     };
-    use gst_base::subclass::prelude::{BaseSinkImpl, BaseSinkImplExt};
+    use gstreamer_base::subclass::prelude::{BaseSinkImpl, BaseSinkImplExt};
     use parking_lot::Mutex;
 
     use super::DEFAULT_CHUNK_SIZE;
 
-    static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
-        gst::DebugCategory::new(
+    static CAT: LazyLock<gstreamer::DebugCategory> = LazyLock::new(|| {
+        gstreamer::DebugCategory::new(
             "opentalk-matroska-s3-sink",
-            gst::DebugColorFlags::empty(),
+            gstreamer::DebugColorFlags::empty(),
             Some("OpenTalk Matroska Chunks"),
         )
     });
@@ -97,7 +97,7 @@ mod imp {
     impl ObjectSubclass for MatroskaS3Sink {
         const NAME: &'static str = "OpenTalkMatroskaUploadSink";
         type Type = super::MatroskaS3Sink;
-        type ParentType = gst_base::BaseSink;
+        type ParentType = gstreamer_base::BaseSink;
     }
 
     impl ObjectImpl for MatroskaS3Sink {
@@ -128,10 +128,14 @@ mod imp {
                 "chunk-size" => match value.get::<u64>() {
                     Ok(value) => self.inner.lock().chunk_size = value,
                     Err(e) => {
-                        gst::error!(CAT, imp = self, "Failed to set paramter 'chunk-size', {e}");
+                        gstreamer::error!(
+                            CAT,
+                            imp = self,
+                            "Failed to set paramter 'chunk-size', {e}"
+                        );
                     }
                 },
-                name => gst::error!(CAT, imp = self, "Unknown property '{name}'"),
+                name => gstreamer::error!(CAT, imp = self, "Unknown property '{name}'"),
             }
         }
 
@@ -143,10 +147,10 @@ mod imp {
     impl GstObjectImpl for MatroskaS3Sink {}
 
     impl ElementImpl for MatroskaS3Sink {
-        fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
-            static ELEMENT_METADATA: LazyLock<gst::subclass::ElementMetadata> = LazyLock::new(
+        fn metadata() -> Option<&'static gstreamer::subclass::ElementMetadata> {
+            static ELEMENT_METADATA: LazyLock<gstreamer::subclass::ElementMetadata> = LazyLock::new(
                 || {
-                    gst::subclass::ElementMetadata::new(
+                    gstreamer::subclass::ElementMetadata::new(
                     "OpenTalkMatroskaS3Sink",
                     "Sink/Network",
                     "Split a matroska stream into chunks that can be uploaded using the S3 multipart API",
@@ -158,13 +162,13 @@ mod imp {
             Some(&*ELEMENT_METADATA)
         }
 
-        fn pad_templates() -> &'static [gst::PadTemplate] {
-            static PAD_TEMPLATES: LazyLock<Vec<gst::PadTemplate>> = LazyLock::new(|| {
-                let sink_pad_template = gst::PadTemplate::new(
+        fn pad_templates() -> &'static [gstreamer::PadTemplate] {
+            static PAD_TEMPLATES: LazyLock<Vec<gstreamer::PadTemplate>> = LazyLock::new(|| {
+                let sink_pad_template = gstreamer::PadTemplate::new(
                     "sink",
-                    gst::PadDirection::Sink,
-                    gst::PadPresence::Always,
-                    &gst::Caps::new_any(),
+                    gstreamer::PadDirection::Sink,
+                    gstreamer::PadPresence::Always,
+                    &gstreamer::Caps::new_any(),
                 )
                 .expect("unable to create PadTemplate sink for matroskas3sink");
 
@@ -176,7 +180,7 @@ mod imp {
     }
 
     impl BaseSinkImpl for MatroskaS3Sink {
-        fn event(&self, event: gst::Event) -> bool {
+        fn event(&self, event: gstreamer::Event) -> bool {
             match event.view() {
                 EventView::Segment(segment) => {
                     let segment = segment.segment();
@@ -190,7 +194,7 @@ mod imp {
             self.parent_event(event)
         }
 
-        fn query(&self, query: &mut gst::QueryRef) -> bool {
+        fn query(&self, query: &mut gstreamer::QueryRef) -> bool {
             if let QueryViewMut::Seeking(seeking) = query.view_mut() {
                 seeking.set(
                     seeking.format() == Format::Bytes,
@@ -203,17 +207,20 @@ mod imp {
             }
         }
 
-        fn render(&self, buffer: &gst::Buffer) -> Result<gst::FlowSuccess, gst::FlowError> {
+        fn render(
+            &self,
+            buffer: &gstreamer::Buffer,
+        ) -> Result<gstreamer::FlowSuccess, gstreamer::FlowError> {
             if let Err(e) = self.inner.lock().render_buffer(&self.obj(), buffer) {
-                gst::element_error!(
+                gstreamer::element_error!(
                     self.obj(),
                     StreamError::Failed,
                     ("Failed to render_buffer: {e:?}")
                 );
 
-                Err(gst::FlowError::Error)
+                Err(gstreamer::FlowError::Error)
             } else {
-                Ok(gst::FlowSuccess::Ok)
+                Ok(gstreamer::FlowSuccess::Ok)
             }
         }
     }
@@ -222,18 +229,18 @@ mod imp {
         fn render_buffer(
             &mut self,
             obj: &BorrowedObject<super::MatroskaS3Sink>,
-            buffer: &gst::Buffer,
-        ) -> Result<gst::FlowSuccess> {
+            buffer: &gstreamer::Buffer,
+        ) -> Result<gstreamer::FlowSuccess> {
             let readable = buffer.map_readable().context("Failed to map buffer")?;
 
             self.write(obj, &readable)?;
 
-            Ok(gst::FlowSuccess::Ok)
+            Ok(gstreamer::FlowSuccess::Ok)
         }
 
         fn handle_segment(
             &mut self,
-            segment: &gst::FormattedSegment<GenericFormattedValue>,
+            segment: &gstreamer::FormattedSegment<GenericFormattedValue>,
         ) -> bool {
             let GenericFormattedValue::Bytes(Some(segment_start)) = segment.start() else {
                 return false;
@@ -344,10 +351,10 @@ mod tests {
 
     #[test]
     fn multipart_upload_simulator() {
-        use gst::prelude::*;
+        use gstreamer::prelude::*;
 
         env_logger::init();
-        gst::init().unwrap();
+        gstreamer::init().unwrap();
         register().unwrap();
 
         let main_loop = glib::MainLoop::new(None, false);
@@ -355,7 +362,7 @@ mod tests {
         let ml = main_loop.clone();
         std::thread::spawn(move || ml.run());
 
-        let pipeline = gst::parse::launch(
+        let pipeline = gstreamer::parse::launch(
             "
         audiotestsrc
                 volume=0.1
@@ -378,7 +385,7 @@ mod tests {
             ! opentalk-matroska-s3-sink name=sink  chunk-size=5000000 sync=false",
         )
         .unwrap();
-        let pipeline = pipeline.downcast::<gst::Pipeline>().unwrap();
+        let pipeline = pipeline.downcast::<gstreamer::Pipeline>().unwrap();
 
         let multipart_upload_simulator = <Arc<Mutex<BTreeMap<u64, Vec<u8>>>>>::default();
 
@@ -393,21 +400,21 @@ mod tests {
             None
         });
 
-        pipeline.set_state(gst::State::Playing).unwrap();
+        pipeline.set_state(gstreamer::State::Playing).unwrap();
 
         let bus = pipeline.bus().unwrap();
 
         std::thread::sleep(std::time::Duration::from_secs(12));
 
-        pipeline.send_event(gst::event::Eos::new());
+        pipeline.send_event(gstreamer::event::Eos::new());
 
         for e in bus.iter_timed(None) {
-            if let gst::MessageView::Eos(_) = e.view() {
+            if let gstreamer::MessageView::Eos(_) = e.view() {
                 break;
             }
         }
 
-        pipeline.set_state(gst::State::Null).unwrap();
+        pipeline.set_state(gstreamer::State::Null).unwrap();
 
         main_loop.quit();
 

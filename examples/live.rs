@@ -29,9 +29,9 @@ mod example {
     pub(crate) async fn main() -> anyhow::Result<()> {
         env_logger::init();
 
-        gst::init()?;
+        gstreamer::init()?;
 
-        let main_loop = gst::glib::MainLoop::new(None, false);
+        let main_loop = gstreamer::glib::MainLoop::new(None, false);
         std::thread::spawn({
             let main_loop = main_loop.clone();
 
