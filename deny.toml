@@ -178,6 +178,7 @@ skip = [
   { name = "itertools", version = "=0.12.1" },
   { name = "roxmltree", version = "=0.20.0" },
   { name = "syn", version = "=1.0.109" },
+  { name = "syn", version = "2" },
   { name = "thiserror-impl", version = "1" },
   { name = "thiserror", version = "1" },
 ]
