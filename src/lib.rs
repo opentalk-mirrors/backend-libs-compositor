@@ -712,12 +712,12 @@ mod tests {
             Ok(_) => unreachable!(),
             Err(e) => {
                 match e {
-                    SignalError::WsError(_) => {
+                    SignalError::Handshake { status } if status == StatusCode::OK => {
                         // success case, the livekit path was correct and we got a websocket error
                         return;
                     }
                     other => {
-                        panic!("Expected a websocket error, but got a different error: {other:?}")
+                        panic!("Expected a handshake error, but got a different error: {other:?}")
                     }
                 }
             }

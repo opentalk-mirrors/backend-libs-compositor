@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use ezk::{
@@ -43,12 +43,12 @@ const FORMAT: Format = Format::I16;
 impl Source for Silence {
     type MediaType = RawAudio;
 
-    async fn capabilities(&mut self) -> ezk::Result<Vec<RawAudioConfigRange>> {
-        Ok(vec![RawAudioConfigRange {
+    fn capabilities(&mut self) -> impl Future<Output = ezk::Result<Vec<RawAudioConfigRange>>> {
+        std::future::ready(Ok(vec![RawAudioConfigRange {
             sample_rate: ValueRange::Value(SampleRate(SAMPLE_RATE)),
             channels: ValueRange::Value(Channels::NotPositioned(CHANNELS)),
             format: ValueRange::Value(FORMAT),
-        }])
+        }]))
     }
 
     async fn negotiate_config(
@@ -101,12 +101,12 @@ pub(crate) struct NativeAudioStreamSource {
 impl Source for NativeAudioStreamSource {
     type MediaType = RawAudio;
 
-    async fn capabilities(&mut self) -> ezk::Result<Vec<RawAudioConfigRange>> {
-        Ok(vec![RawAudioConfigRange {
+    fn capabilities(&mut self) -> impl Future<Output = ezk::Result<Vec<RawAudioConfigRange>>> {
+        std::future::ready(Ok(vec![RawAudioConfigRange {
             sample_rate: ValueRange::Value(SampleRate(SAMPLE_RATE)),
             channels: ValueRange::Value(Channels::NotPositioned(CHANNELS)),
             format: ValueRange::Value(FORMAT),
-        }])
+        }]))
     }
 
     async fn negotiate_config(
