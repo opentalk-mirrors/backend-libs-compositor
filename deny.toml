@@ -41,13 +41,6 @@ yanked = "deny"
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-  # rustybuzz is unmaintained
-  # ├ rustybuzz v0.20.1
-  # └── usvg v0.47.0
-  #     └── resvg v0.47.0
-  #         └── opentalk-compositor v0.18.1
-  "RUSTSEC-2026-0206",
-
   # ttf-parser is unmaintained
   # ├ ttf-parser v0.25.1
   # ├── fontdb v0.23.0
@@ -181,6 +174,7 @@ skip = [
   { name = "syn", version = "2" },
   { name = "thiserror-impl", version = "1" },
   { name = "thiserror", version = "1" },
+  { name = "base64", version = "0.22" },
   { name = "miniz_oxide", version = "0.8" },
   { name = "system-deps", version = "7" },
 ]
