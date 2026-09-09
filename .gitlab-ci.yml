@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 
 ---
-image: git.opentalk.dev:5050/opentalk/backend/containers/rust:1.97.1-trixie
+image: git.opentalk.dev:5050/opentalk/backend/containers/rust:1.98.0-trixie
 
 stages:
   - lint
@@ -16,6 +16,8 @@ variables:
   CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
   # Enable one network per build for the test container and services
   FF_NETWORK_PER_BUILD: 'true'
+  # The `livekit` client crate pulls in `webrtc-sys`, whose build script refuses to compile with GCC or clang < 20
+  CXX: clang++-21
 
 .default_job_condition: &default_job_condition
   needs: []
