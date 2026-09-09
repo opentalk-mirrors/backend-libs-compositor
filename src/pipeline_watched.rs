@@ -172,6 +172,23 @@ impl PipelineWatched {
     }
 }
 
+impl Drop for PipelineWatched {
+    fn drop(&mut self) {
+        if self.pipeline.current_state() == gstreamer::State::Null {
+            return;
+        }
+
+        log::warn!(
+            "Pipeline {} was dropped without being closed, setting it to the Null",
+            self.pipeline.name()
+        );
+
+        if let Err(err) = self.pipeline.set_state(gstreamer::State::Null) {
+            log::error!("Failed to set the pipeline to Null state, {err}");
+        }
+    }
+}
+
 impl Deref for PipelineWatched {
     type Target = Pipeline;
 

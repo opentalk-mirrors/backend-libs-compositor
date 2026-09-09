@@ -452,7 +452,12 @@ impl Mixer {
 
     pub async fn release_sink(&mut self, name: &String) {
         trace!("release_sink {name}");
-        self.sinks.lock().await.remove(name);
+
+        let sink = self.sinks.lock().await.remove(name);
+
+        if let Some(mut sink) = sink {
+            close_sink(name, sink.as_mut()).await;
+        }
     }
 
     /// Sets the event title of this [`Mixer`].
@@ -721,11 +726,15 @@ async fn close_mixer(
     let mut sinks = sinks.lock().await;
 
     for (name, mut sink) in sinks.drain() {
-        log::debug!("Closing sink {name:?}");
+        close_sink(&name, sink.as_mut()).await;
+    }
+}
 
-        if let Err(err) = sink.close().await {
-            log::warn!("Failed to close sink {name}, {err:?}");
-        }
+async fn close_sink(name: &str, sink: &mut dyn Sink) {
+    log::debug!("Closing sink {name:?}");
+
+    if let Err(err) = sink.close().await {
+        log::warn!("Failed to close sink {name}, {err:?}");
     }
 }
 
