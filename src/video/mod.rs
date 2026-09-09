@@ -20,7 +20,7 @@ use ezk_image::{
     resize::{FilterType, ResizeAlg, Resizer},
     Cropped, Image, ImageRef, PixelFormat, Window,
 };
-use futures::{stream::SelectAll, Stream, StreamExt};
+use futures::{stream::SelectAll, FutureExt, Stream, StreamExt};
 use image::DynamicImage;
 use livekit::{
     id::{ParticipantIdentity, TrackSid},
@@ -28,7 +28,7 @@ use livekit::{
     webrtc::video_frame::{I420Buffer, VideoBuffer},
 };
 use tokio::{
-    sync::{broadcast, mpsc, oneshot, Mutex},
+    sync::{mpsc, oneshot, watch, Mutex},
     task::JoinHandle,
     time::{interval_at, Interval, MissedTickBehavior},
 };
@@ -36,8 +36,8 @@ use tokio::{
 use crate::{
     font::{DrawText, SimpleText, TextBox},
     image::{blend_yuv, I420BufferImageRef, I420Image, Point},
-    Participant, Shared, Sink, SpeakingState, BORDER, HEIGHT, I420_COLOR, OFFSET_TOP, PADDING,
-    WIDTH,
+    Participant, Shared, Sink, SpeakingState, WantShutdown, BORDER, HEIGHT, I420_COLOR, OFFSET_TOP,
+    PADDING, WIDTH,
 };
 
 pub(crate) mod placeholder;
@@ -92,7 +92,7 @@ impl VideoPipeline {
     pub(crate) fn create(
         sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
         shared: Arc<StdMutex<Shared>>,
-        shutdown_channel: broadcast::Receiver<()>,
+        shutdown_channel: watch::Receiver<WantShutdown>,
         target_fps: u16,
     ) -> Result<(mpsc::UnboundedSender<VideoStreamCommand>, JoinHandle<()>)> {
         let background_image =
@@ -193,7 +193,7 @@ impl VideoPipeline {
         self.video_frames.insert(track_sid, video_frame);
     }
 
-    pub(crate) async fn run(mut self, mut shutdown_channel: broadcast::Receiver<()>) {
+    pub(crate) async fn run(mut self, mut shutdown_channel: watch::Receiver<WantShutdown>) {
         let mut frame_counter = 0u64;
         let mut now = Instant::now();
         let target_frame_interval = 1000 / self.target_fps;
@@ -204,7 +204,7 @@ impl VideoPipeline {
 
         loop {
             tokio::select! {
-                _ = shutdown_channel.recv() => {
+                () = shutdown_channel.wait_for(|v| matches!(v, WantShutdown::Yes)).map(|_| ()) => {
                     log::debug!("Shutdown received for VideoPipeline");
                     return;
                 }

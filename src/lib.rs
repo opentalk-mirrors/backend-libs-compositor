@@ -5,6 +5,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 use std::sync::Mutex as StdMutex;
+use std::time::Duration;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use anyhow::{bail, Context, Result};
@@ -19,8 +20,10 @@ use livekit::{
     webrtc::{audio_stream::native::NativeAudioStream, video_stream::native::NativeVideoStream},
 };
 use livekit_api::access_token::{AccessToken, AccessTokenError, VideoGrants};
+use tokio::sync::watch;
+use tokio::time::timeout;
 use tokio::{
-    sync::{broadcast, mpsc, Mutex},
+    sync::{mpsc, Mutex},
     task::JoinHandle,
 };
 use video::{VideoPipeline, VideoStreamCommand};
@@ -93,7 +96,7 @@ pub struct Mixer {
 
     sinks: Arc<Mutex<HashMap<String, Box<dyn Sink>>>>,
 
-    room: Room,
+    room: Option<Room>,
     // LiveKitRoom events
     room_events: mpsc::UnboundedReceiver<RoomEvent>,
 
@@ -113,7 +116,12 @@ pub struct Mixer {
     video_stream_tx: mpsc::UnboundedSender<VideoStreamCommand>,
     video_task: Option<JoinHandle<()>>,
 
-    shutdown_tx: broadcast::Sender<()>,
+    shutdown_tx: watch::Sender<WantShutdown>,
+}
+
+enum WantShutdown {
+    Yes,
+    No,
 }
 
 #[derive(Debug, Clone)]
@@ -202,7 +210,7 @@ impl Mixer {
         let audio_mixer_task = tokio::spawn(audio_mixer_task(access, sinks.clone()));
 
         // Initialize Video Mixer
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = watch::channel(WantShutdown::No);
         let (video_stream_tx, video_task) = VideoPipeline::create(
             sinks.clone(),
             shared.clone(),
@@ -216,7 +224,7 @@ impl Mixer {
             start,
             auto_subscribe: parameters.auto_subscribe,
             sinks,
-            room,
+            room: Some(room),
             room_events,
             http_client: reqwest::Client::new(),
             external_room_event_handler: vec![],
@@ -239,9 +247,19 @@ impl Mixer {
             .push(Box::new(event_handler));
     }
 
+    /// Returns the local livekit participant which can be used to publish additional tracks
+    ///
+    /// # Panics
+    ///
+    /// Panics when called after calling [`Mixer::close`]
     #[must_use]
     pub fn local_participant(&self) -> LocalParticipant {
-        self.room.local_participant()
+        let room = self
+            .room
+            .as_ref()
+            .expect("must not call any function after calling close");
+
+        room.local_participant()
     }
 
     /// Run the compositor event loop
@@ -249,9 +267,18 @@ impl Mixer {
     /// Returns once the client was disconnected from livekit
     ///
     /// This function is cancel safe
+    ///
+    /// # Panics
+    ///
+    /// Panics when called after calling [`Mixer::close`]
     pub async fn run(&mut self) -> DisconnectReason {
+        let room = self
+            .room
+            .as_ref()
+            .expect("must not call any function after calling close");
+
         if self.auto_subscribe {
-            for participant in self.room.remote_participants().values() {
+            for participant in room.remote_participants().values() {
                 self.add_participant(&participant.identity(), participant.name());
             }
         }
@@ -497,7 +524,13 @@ impl Mixer {
                 avatar: None,
             });
 
-        if let Some(remote_participant) = self.room.remote_participants().get(identity) {
+        if let Some(remote_participant) = self
+            .room
+            .as_ref()
+            .expect("room exists")
+            .remote_participants()
+            .get(identity)
+        {
             for (_track_sid, track_publication) in remote_participant.track_publications() {
                 track_publication.set_subscribed(true);
             }
@@ -596,7 +629,12 @@ impl Mixer {
         shared.render_frames = enabled;
 
         // set subscription state of all participant publications
-        for (pid, remote_participant) in self.room.remote_participants() {
+        for (pid, remote_participant) in self
+            .room
+            .as_ref()
+            .expect("room exists")
+            .remote_participants()
+        {
             if !shared.participants.contains_key(&pid) {
                 // not tracking this participant, skip
                 continue;
@@ -609,34 +647,85 @@ impl Mixer {
             }
         }
     }
+
+    pub async fn close(&mut self) {
+        let Some(room) = self.room.take() else {
+            return;
+        };
+
+        self.audio_mixer_task.abort();
+
+        close_mixer(
+            self.shutdown_tx.clone(),
+            self.video_task.take(),
+            self.sinks.clone(),
+            room,
+        )
+        .await;
+    }
 }
 
 impl Drop for Mixer {
     fn drop(&mut self) {
-        log::debug!("Drop Mixer");
+        let Some(room) = self.room.take() else {
+            // already shut down
+            return;
+        };
 
-        tokio::task::block_in_place(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                if let Err(e) = self.room.close().await {
-                    log::warn!("Failed to close livekit room, {e:?}");
+        self.audio_mixer_task.abort();
+
+        let video_task = self.video_task.take();
+
+        tokio::spawn(close_mixer(
+            self.shutdown_tx.clone(),
+            video_task,
+            self.sinks.clone(),
+            room,
+        ));
+    }
+}
+
+async fn close_mixer(
+    shutdown_tx: watch::Sender<WantShutdown>,
+    video_task: Option<JoinHandle<()>>,
+    sinks: Arc<Mutex<HashMap<String, Box<dyn Sink + 'static>>>>,
+    livekit_room: Room,
+) {
+    if let Err(e) = livekit_room.close().await {
+        log::warn!("Failed to close livekit room, {e:?}");
+    }
+
+    log::debug!("Send shutdown to all tasks");
+
+    shutdown_tx.send_replace(WantShutdown::Yes);
+
+    if let Some(video_task) = video_task {
+        if !video_task.is_finished() {
+            log::debug!("Waiting for video task to be finished");
+
+            match timeout(Duration::from_secs(8), video_task).await {
+                Ok(Ok(())) => {
+                    log::debug!("Video task has completed");
                 }
-
-                log::debug!("Send shutdown to all tasks");
-                self.shutdown_tx.send(()).ok();
-
-                if let Some(video_task) = self.video_task.take() {
-                    if !video_task.is_finished() {
-                        log::debug!("Wait for video task to be finished");
-                        video_task.await.expect("unable to await video task");
-                    }
+                Ok(Err(err)) => {
+                    log::warn!("Failed to wait for video task, {err:?}");
                 }
+                Err(_) => {
+                    log::warn!("Timeout while waiting for video task");
+                }
+            }
+        }
+    }
 
-                log::debug!("Drop all active sinks");
-                self.sinks.lock().await.drain();
+    log::debug!("Drop all active sinks");
+    let mut sinks = sinks.lock().await;
 
-                self.audio_mixer_task.abort();
-            });
-        });
+    for (name, mut sink) in sinks.drain() {
+        log::debug!("Closing sink {name:?}");
+
+        if let Err(err) = sink.close().await {
+            log::warn!("Failed to close sink {name}, {err:?}");
+        }
     }
 }
 

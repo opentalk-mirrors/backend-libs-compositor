@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{ops::Deref, sync::Arc};
+use std::{ops::Deref, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use glib::{ControlFlow, GString};
 use gstreamer::{bus::BusWatchGuard, prelude::*, MessageView, Object, Pipeline};
 use log::{max_level, Level};
 use parking_lot::Mutex;
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, time::timeout};
 
 use crate::debug;
 
@@ -136,36 +136,39 @@ impl PipelineWatched {
     {
         self.callbacks.lock().push(Box::new(callback));
     }
-}
 
-impl Drop for PipelineWatched {
-    fn drop(&mut self) {
-        log::debug!("Drop PipelineWatched");
+    pub(crate) async fn close(&mut self) {
+        log::debug!("close pipeline {}", self.pipeline.name());
 
-        tokio::task::block_in_place(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                log::debug!("drop sink {}", self.pipeline.name());
+        debug::debug_dot(&self.pipeline, &format!("drop-{}", self.pipeline.name()));
 
-                let pipeline_name = self.pipeline.name();
+        if let Some(eos) = self.eos.take() {
+            self.pipeline.send_event(gstreamer::event::Eos::new());
 
-                debug::debug_dot(&self.pipeline, &format!("drop-{pipeline_name}"));
+            trace!("wait for eos");
 
-                if let Some(eos) = self.eos.take() {
-                    self.pipeline.send_event(gstreamer::event::Eos::new());
-
-                    trace!("wait for eos");
-                    if let Err(err) = eos.await {
-                        log::error!("unable to wait for the eos, received {err}");
-                    }
+            match timeout(Duration::from_secs(8), eos).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_e)) => {
+                    log::error!(
+                        "Failed to receive EOS signal for pipeline {}",
+                        self.pipeline.name()
+                    );
                 }
-
-                if let Err(error) = self.pipeline.set_state(gstreamer::State::Null) {
-                    log::error!("Unable to set the pipeline to the `Null` state, error: {error}");
+                Err(_) => {
+                    log::error!(
+                        "Timeout while waiting for EOS signal for pipeline {}",
+                        self.pipeline.name()
+                    );
                 }
+            }
+        }
 
-                log::debug!("drop for pipeline {pipeline_name} is done");
-            });
-        });
+        if let Err(error) = self.pipeline.set_state(gstreamer::State::Null) {
+            log::error!("Unable to set the pipeline to the `Null` state, error: {error}");
+        }
+
+        log::debug!("close for pipeline {} is done", self.pipeline.name());
     }
 }
 

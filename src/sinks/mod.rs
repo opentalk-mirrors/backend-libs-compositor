@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::fmt::Debug;
+use std::{fmt::Debug, future::Future, pin::Pin};
 
 use anyhow::Result;
 use ezk::Frame;
@@ -36,4 +36,6 @@ pub trait Sink: Send + Debug {
     fn on_audio_frame(&mut self, frame: Frame<RawAudio>) -> BoxFuture<'_, Result<()>>;
 
     fn on_video_frame(&mut self, buffer: &[u8]) -> Result<()>;
+
+    fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 }

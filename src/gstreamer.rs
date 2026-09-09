@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{fmt::Debug, future::ready, time::Instant};
+use std::{
+    fmt::Debug,
+    future::{ready, Future},
+    pin::Pin,
+    time::Instant,
+};
 
 use anyhow::{Context, Result};
 use ezk::Frame;
@@ -256,6 +261,13 @@ impl Sink for GStreamerActiveSink {
         }
 
         Ok(())
+    }
+
+    fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async {
+            self.pipeline.close().await;
+            Ok(())
+        })
     }
 }
 
