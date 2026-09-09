@@ -11,6 +11,11 @@
       ],
       "groupName": "gstreamer",
       "groupSlug": "gstreamer"
+    },
+    {
+      "matchPackageNames": ["livekit*"],
+      "groupName": "livekit",
+      "groupSlug": "livekit"
     }
   ]
 }
