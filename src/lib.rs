@@ -148,11 +148,11 @@ impl std::fmt::Debug for Mixer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Participant {
     display_name: String,
     // Optional avatar to show instead of the placeholder image
-    avatar: Option<I420Buffer>,
+    avatar: Option<Arc<I420Buffer>>,
 }
 
 pub struct MixerParameters {
@@ -581,10 +581,10 @@ impl Mixer {
             let mut shared = shared.lock().unwrap();
 
             if let Some(participant) = shared.participants.get_mut(&identity) {
-                participant.avatar = Some(
+                participant.avatar = Some(Arc::new(
                     video::placeholder::avatar_to_placeholder(&avatar)
                         .context("Failed to convert received avatar to I420Buffer")?,
-                );
+                ));
             }
 
             Ok(())
