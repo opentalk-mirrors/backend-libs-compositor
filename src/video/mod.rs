@@ -28,7 +28,7 @@ use livekit::{
     webrtc::video_frame::{I420Buffer, VideoBuffer},
 };
 use tokio::{
-    sync::{mpsc, oneshot, watch, Mutex},
+    sync::{mpsc, watch, Mutex},
     task::JoinHandle,
     time::{interval_at, Interval, MissedTickBehavior},
 };
@@ -228,20 +228,14 @@ impl VideoPipeline {
                     last_frame = current_frame.into();
 
                     // Move self into a blocking threadpool to avoid locking up the tokio runtime while compositing the video
-                    let (tx, rx) = oneshot::channel();
-                    tokio::task::spawn_blocking(move || {
+
+                    self = tokio::task::spawn_blocking(move || {
                         if let Err(err) = self.rerender_frame() {
                             log::error!("Rerender frame failed: {err:?}");
                         }
 
-                        if tx.send(self).is_err() {
-                            log::error!("Failed to return to the async runtime from the blocking threadpool, was the task aborted?");
-                        }
+                        self
                     }).await.expect("unable to spawn rerender_frame task");
-
-                    self = rx
-                        .await
-                        .expect("Failed to receive self from the blocking threadpool");
                 }
                 Some(command) = self.commands_rx.recv() => {
                     self.handle_command(command, last_frame, &mut rerender_interval);
@@ -325,13 +319,25 @@ impl VideoPipeline {
 
     #[allow(clippy::many_single_char_names, clippy::too_many_lines)]
     fn rerender_frame(&mut self) -> Result<()> {
-        let shared = self.shared.lock().unwrap();
         let mut base_image_buf = self.base_image.clone();
         let mut base_image = I420Image::try_from(&mut base_image_buf, Point::new(WIDTH, HEIGHT))?;
 
+        let shared = self.shared.lock().unwrap();
+
+        let clock_format = shared.clock_format.clone();
+        let event_title = shared.event_title.clone();
+        let participants_to_show = get_participants_to_show(
+            &self.tracks,
+            &self.video_frames,
+            &shared.participants,
+            &shared.speakers,
+        );
+
+        drop(shared);
+
         // ==== Render Event Title ====
 
-        if let Some(event_title) = &shared.event_title {
+        if let Some(event_title) = &event_title {
             let event_title_text = SimpleText::new(32.0, event_title);
             event_title_text.draw(
                 Point::new(
@@ -344,7 +350,7 @@ impl VideoPipeline {
 
         // ==== Render Datetime ====
 
-        let text = &Local::now().format(&shared.clock_format.0).to_string();
+        let text = &Local::now().format(&clock_format.0).to_string();
         let date_time_text = SimpleText::new(32.0, text);
 
         date_time_text.draw(
@@ -356,12 +362,6 @@ impl VideoPipeline {
         );
 
         // ==== Render All Participants  ====
-        let participants_to_show = get_participants_to_show(
-            &self.tracks,
-            &self.video_frames,
-            &shared.participants,
-            &shared.speakers,
-        );
 
         let participants_to_show_len = participants_to_show.len();
         for (pos, participant_to_show) in participants_to_show.into_iter().take(8).enumerate() {
@@ -447,7 +447,7 @@ impl VideoPipeline {
                     TrackSource::Camera => TrackSource::Microphone,
                     TrackSource::Screenshare => {
                         let participant_has_camera = self.tracks.values().any(|t| {
-                            t.participant_identity == *participant_to_show.participant_identity
+                            t.participant_identity == participant_to_show.participant_identity
                                 && t.source == TrackSource::Camera
                                 && !t.is_muted
                         });
@@ -463,7 +463,7 @@ impl VideoPipeline {
                 };
 
                 let participant_has_audio = self.tracks.values().any(|t| {
-                    t.participant_identity == *participant_to_show.participant_identity
+                    t.participant_identity == participant_to_show.participant_identity
                         && t.source == source
                         && !t.is_muted
                 });
@@ -497,7 +497,7 @@ impl VideoPipeline {
 
                 // If there's not any audio for this participant of any kind - render the mic off icon on the current tile
                 let has_any_audio = self.tracks.values().any(|track_data| {
-                    track_data.participant_identity == *participant_to_show.participant_identity
+                    track_data.participant_identity == participant_to_show.participant_identity
                         && (track_data.source == TrackSource::Microphone
                             || track_data.source == TrackSource::ScreenshareAudio)
                         && !track_data.is_muted
@@ -589,8 +589,8 @@ fn horizontal_line(
 }
 
 struct ParticipantToShow<'a> {
-    participant: &'a Participant,
-    participant_identity: &'a ParticipantIdentity,
+    participant: Participant,
+    participant_identity: ParticipantIdentity,
     i420_video: Option<(&'a I420Buffer, TrackSource)>,
     is_speaking: bool,
 }
@@ -598,7 +598,7 @@ struct ParticipantToShow<'a> {
 fn get_participants_to_show<'a>(
     tracks: &'a HashMap<TrackSid, TrackData>,
     video_frames: &'a HashMap<TrackSid, I420Buffer>,
-    participants: &'a HashMap<ParticipantIdentity, Participant>,
+    participants: &HashMap<ParticipantIdentity, Participant>,
     speakers: &HashMap<ParticipantIdentity, SpeakingState>,
 ) -> Vec<ParticipantToShow<'a>> {
     let mut participant_sort_items = participants
@@ -610,7 +610,12 @@ fn get_participants_to_show<'a>(
 
             let speaking_state = speakers.get(identity);
 
-            (identity, participant, has_screenshare, speaking_state)
+            (
+                identity.clone(),
+                participant.clone(),
+                has_screenshare,
+                speaking_state,
+            )
         })
         .collect::<Vec<_>>();
 
@@ -629,7 +634,7 @@ fn get_participants_to_show<'a>(
                 let mut tracks = tracks
                     .iter()
                     .filter(|(_track_id, track_data)| {
-                        track_data.participant_identity == *identity
+                        track_data.participant_identity == identity
                             && (track_data.source == TrackSource::Camera
                                 || track_data.source == TrackSource::Screenshare)
                             && !track_data.is_muted
@@ -649,8 +654,8 @@ fn get_participants_to_show<'a>(
                     tracks
                         .into_iter()
                         .map(|(track_id, track_data)| ParticipantToShow {
-                            participant,
-                            participant_identity: identity,
+                            participant: participant.clone(),
+                            participant_identity: identity.clone(),
                             i420_video: video_frames.get(track_id).map(|f| (f, track_data.source)),
                             is_speaking: speaking_state.is_some_and(|state| state.is_speaking),
                         })
