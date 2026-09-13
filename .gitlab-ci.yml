@@ -119,9 +119,11 @@ lint:unnecessary_dependencies:
 lint:markdown:
   stage: lint
   <<: *default_job_condition
-  image: registry.gitlab.com/pipeline-components/markdownlint:latest
+  image:
+    name: registry.heinlein.group/opentalk-tools/common-lint:v0.1.1
+    pull_policy: if-not-present
   script:
-    - mdl --style .markdown_style.rb  --warnings .
+    - npx markdownlint-cli2 --warnings "*/.md"
 
 lint:licensing:
   stage: lint
