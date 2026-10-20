@@ -176,7 +176,20 @@ skip = [
   { name = "thiserror", version = "1" },
   { name = "base64", version = "0.22" },
   { name = "miniz_oxide", version = "0.8" },
-  { name = "system-deps", version = "7" },
+  # livekit-api 0.7 still depends on livekit-protocol 0.7 while livekit uses 0.8
+  { name = "fixedbitset", version = "=0.4.2" },
+  { name = "foldhash", version = "=0.1.5" },
+  { name = "hashbrown", version = "=0.15.5" },
+  { name = "itertools", version = "=0.14.0" },
+  { name = "livekit-protocol", version = "=0.7.13" },
+  { name = "pbjson", version = "=0.6.0" },
+  { name = "pbjson-build", version = "=0.6.2" },
+  { name = "pbjson-types", version = "=0.6.0" },
+  { name = "petgraph", version = "=0.6.5" },
+  { name = "prost", version = "=0.12.6" },
+  { name = "prost-build", version = "=0.12.6" },
+  { name = "prost-derive", version = "=0.12.6" },
+  { name = "prost-types", version = "=0.12.6" },
 ]
 # Similarly to `skip` allows you to skip certain crates during duplicate
 # detection. Unlike skip, it also includes the entire tree of transitive
