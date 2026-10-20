@@ -73,19 +73,7 @@ impl PipelineWatched {
 
                             // Close the pipeline on the first error and send a notification.
                             if let Some(sink_failed_tx) = sink_failed_tx.take() {
-                                if let Err(err) = pipeline.set_state(gstreamer::State::Null) {
-                                    log::error!(
-                                        "Failed to set the failed pipeline {} to `null`: {err}",
-                                        pipeline.name(),
-                                    );
-                                }
-
-                                if sink_failed_tx.send(pipeline.name().to_string()).is_err() {
-                                    log::debug!(
-                                        "Receiver for sink failures is gone, not reporting failed pipeline {}",
-                                        pipeline.name()
-                                    );
-                                }
+                                close_failed_pipeline(&pipeline, &sink_failed_tx);
                             }
                         }
                         MessageView::Warning(warn) => {
@@ -226,6 +214,22 @@ impl Deref for PipelineWatched {
 
     fn deref(&self) -> &Self::Target {
         &self.pipeline
+    }
+}
+
+fn close_failed_pipeline(pipeline: &Pipeline, sink_failed_tx: &mpsc::UnboundedSender<String>) {
+    if let Err(err) = pipeline.set_state(gstreamer::State::Null) {
+        log::error!(
+            "Failed to set the failed pipeline {} to `null`: {err}",
+            pipeline.name(),
+        );
+    }
+
+    if sink_failed_tx.send(pipeline.name().to_string()).is_err() {
+        log::debug!(
+            "Receiver for sink failures is gone, not reporting failed pipeline {}",
+            pipeline.name()
+        );
     }
 }
 
